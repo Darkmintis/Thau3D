@@ -2,7 +2,6 @@ import './style.css';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // ---------------------------------------------------------------- constants
@@ -158,22 +157,70 @@ orbit.minDistance = 2.5;
 orbit.maxDistance = 70;
 orbit.screenSpacePanning = false;
 
-const pointer = new PointerLockControls(camera, renderer.domElement);
-pointer.addEventListener('lock', () => {
-  els.resume.hidden = true;
-  els.status.textContent = `${storeyLabelAt(camera.position.y)} · walking`;
-});
-pointer.addEventListener('unlock', () => {
+// camera look is handled in the input section below
+
+// -------------------------------------------------------------------- input
+// We drive the camera ourselves rather than using PointerLockControls: the
+// browser's raw movement deltas are smoothed into a target yaw/pitch and then
+// damped every frame, which is what stops the view snapping when the pointer
+// re-locks or a device reports a spike.
+const LOOK_SENSITIVITY = 0.0022;
+const MAX_DELTA = 90;
+const look = { locked: false, yaw: 0, pitch: 0, targetYaw: 0, targetPitch: 0, dragging: false, fresh: false, x: 0, y: 0 };
+
+const keys = new Set();
+const touchMove = new Set();
+let jumpRequested = false;
+
+function clamp(value, limit) {
+  return Math.max(-limit, Math.min(limit, value));
+}
+
+function applyLookDelta(dx, dy) {
+  look.targetYaw -= clamp(dx, MAX_DELTA) * LOOK_SENSITIVITY;
+  look.targetPitch = THREE.MathUtils.clamp(
+    look.targetPitch - clamp(dy, MAX_DELTA) * LOOK_SENSITIVITY * 0.85,
+    -1.2,
+    1.2,
+  );
+}
+
+function requestLock() {
+  if (isTouch || state.mode !== 'walk') return;
+  const element = renderer.domElement;
+  if (!element.requestPointerLock) return;
+  try {
+    const pending = element.requestPointerLock({ unadjustedMovement: true });
+    if (pending && typeof pending.catch === 'function') {
+      pending.catch(() => element.requestPointerLock());
+    }
+  } catch (error) {
+    element.requestPointerLock();
+  }
+}
+
+document.addEventListener('pointerlockchange', () => {
+  look.locked = document.pointerLockElement === renderer.domElement;
+  if (look.locked) {
+    look.fresh = true;
+    els.resume.hidden = true;
+    els.status.textContent = `${storeyLabelAt(camera.position.y)} · walking`;
+    return;
+  }
   if (state.mode !== 'walk' || isTouch) return;
   els.resume.hidden = false;
   els.status.textContent = 'Paused · click resume to continue';
 });
 
-// -------------------------------------------------------------------- input
-const keys = new Set();
-const touchMove = new Set();
-let jumpRequested = false;
-let lookPointer = null;
+document.addEventListener('mousemove', (event) => {
+  if (!look.locked || state.mode !== 'walk') return;
+  // The first event after a lock can carry a jump from wherever the cursor sat.
+  if (look.fresh) {
+    look.fresh = false;
+    return;
+  }
+  applyLookDelta(event.movementX || 0, event.movementY || 0);
+});
 
 window.addEventListener('keydown', (event) => {
   if (state.mode !== 'walk') return;
@@ -194,31 +241,30 @@ window.addEventListener('blur', () => {
 });
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
-  if (state.mode !== 'walk' || !isTouch || event.pointerType === 'mouse') return;
-  lookPointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
+  if (state.mode !== 'walk' || event.pointerType === 'mouse') return;
+  look.dragging = true;
+  look.fresh = true;
+  look.x = event.clientX;
+  look.y = event.clientY;
   renderer.domElement.setPointerCapture?.(event.pointerId);
 });
 renderer.domElement.addEventListener('pointermove', (event) => {
-  if (!lookPointer || lookPointer.id !== event.pointerId || state.mode !== 'walk') return;
-  const dx = event.clientX - lookPointer.x;
-  const dy = event.clientY - lookPointer.y;
-  lookPointer.x = event.clientX;
-  lookPointer.y = event.clientY;
-  applyLook(dx, dy);
+  if (!look.dragging || state.mode !== 'walk') return;
+  const dx = event.clientX - look.x;
+  const dy = event.clientY - look.y;
+  look.x = event.clientX;
+  look.y = event.clientY;
+  if (look.fresh) {
+    look.fresh = false;
+    return;
+  }
+  applyLookDelta(dx, dy);
 });
-const endLook = (event) => {
-  if (lookPointer?.id === event.pointerId) lookPointer = null;
+const endLook = () => {
+  look.dragging = false;
 };
 renderer.domElement.addEventListener('pointerup', endLook);
 renderer.domElement.addEventListener('pointercancel', endLook);
-
-function applyLook(dx, dy) {
-  const euler = new THREE.Euler(0, 0, 0, 'YXZ');
-  euler.setFromQuaternion(camera.quaternion);
-  euler.y -= dx * 0.0042;
-  euler.x = THREE.MathUtils.clamp(euler.x - dy * 0.0035, -1.3, 1.3);
-  camera.quaternion.setFromEuler(euler);
-}
 
 for (const button of document.querySelectorAll('[data-move]')) {
   const action = button.dataset.move;
@@ -520,6 +566,8 @@ function enterWalk() {
   const spawn = state.manifest.spawn;
   camera.position.set(spawn.position[0], spawn.position[1], spawn.position[2]);
   camera.rotation.set(0, spawn.yaw || 0, 0, 'YXZ');
+  look.yaw = look.targetYaw = spawn.yaw || 0;
+  look.pitch = look.targetPitch = 0;
   state.footY = spawn.position[1] - EYE;
   state.velocityY = 0;
   state.grounded = true;
@@ -527,14 +575,15 @@ function enterWalk() {
   touchMove.clear();
   els.walkButton.querySelector('span').textContent = 'Exit walk';
   els.status.textContent = `${storeyLabelAt(camera.position.y)} · walking`;
-  if (!isTouch) pointer.lock();
+  requestLock();
 }
 
 function exitWalk() {
   state.mode = 'orbit';
   document.body.classList.remove('walking');
   els.resume.hidden = true;
-  if (pointer.isLocked) pointer.unlock();
+  look.dragging = false;
+  if (document.pointerLockElement) document.exitPointerLock();
   orbit.enabled = true;
   els.walkButton.querySelector('span').textContent = 'Walk inside';
   frameBuilding(state.manifest);
@@ -545,6 +594,8 @@ function respawn() {
   const spawn = state.manifest.spawn;
   camera.position.set(spawn.position[0], spawn.position[1], spawn.position[2]);
   camera.rotation.set(0, spawn.yaw || 0, 0, 'YXZ');
+  look.yaw = look.targetYaw = spawn.yaw || 0;
+  look.pitch = look.targetPitch = 0;
   state.footY = spawn.position[1] - EYE;
   state.velocityY = 0;
   state.grounded = true;
@@ -601,7 +652,14 @@ function tryMove(dx, dz) {
   }
 }
 
+function updateLook(delta) {
+  look.yaw = THREE.MathUtils.damp(look.yaw, look.targetYaw, 16, delta);
+  look.pitch = THREE.MathUtils.damp(look.pitch, look.targetPitch, 16, delta);
+  camera.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
+}
+
 function updateWalk(delta) {
+  updateLook(delta);
   const forward = Number(keys.has('KeyW') || keys.has('ArrowUp') || touchMove.has('forward'))
     - Number(keys.has('KeyS') || keys.has('ArrowDown') || touchMove.has('back'));
   const strafe = Number(keys.has('KeyD') || keys.has('ArrowRight') || touchMove.has('right'))
@@ -752,7 +810,7 @@ els.walkButton.addEventListener('click', () => {
 });
 $('#resume-button').addEventListener('click', () => {
   if (isTouch) els.resume.hidden = true;
-  else pointer.lock();
+  else requestLock();
 });
 $('#exit-button').addEventListener('click', () => exitWalk());
 $('#fullscreen-button').addEventListener('click', async () => {
