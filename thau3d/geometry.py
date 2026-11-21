@@ -66,7 +66,18 @@ class MeshData:
             self.normals.append(plan_to_gl(normal))
         self.indices.extend((start, start + 1, start + 2, start, start + 2, start + 3))
 
-    def extend(self, other: "MeshData") -> None:
+    def raw_quad(self, a: Vec3, b: Vec3, c: Vec3, d: Vec3, normal: Vec3) -> None:
+        """Add a quad already expressed in glTF space (no plan conversion)."""
+        winding = _cross(_subtract(b, a), _subtract(c, a))
+        if _dot(winding, normal) < 0:
+            b, d = d, b
+        start = len(self.positions)
+        for corner in (a, b, c, d):
+            self.positions.append(corner)
+            self.normals.append(normal)
+        self.indices.extend((start, start + 1, start + 2, start, start + 2, start + 3))
+
+    def merge(self, other: "MeshData") -> None:
         offset = len(self.positions)
         self.positions.extend(other.positions)
         self.normals.extend(other.normals)
@@ -118,6 +129,33 @@ def box(center: Vec3, size: Vec3, yaw: float = 0.0) -> MeshData:
         )
     return mesh
 
+
+def box_xyz(center: Vec3, size: Vec3) -> MeshData:
+    """Axis-aligned box authored directly in glTF space, for node-local geometry."""
+    cx, cy, cz = center
+    hx, hy, hz = size[0] / 2.0, size[1] / 2.0, size[2] / 2.0
+    corners = {
+        "000": (cx - hx, cy - hy, cz - hz),
+        "100": (cx + hx, cy - hy, cz - hz),
+        "110": (cx + hx, cy + hy, cz - hz),
+        "010": (cx - hx, cy + hy, cz - hz),
+        "001": (cx - hx, cy - hy, cz + hz),
+        "101": (cx + hx, cy - hy, cz + hz),
+        "111": (cx + hx, cy + hy, cz + hz),
+        "011": (cx - hx, cy + hy, cz + hz),
+    }
+    mesh = MeshData()
+    faces = (
+        ("100", "110", "111", "101", (1.0, 0.0, 0.0)),
+        ("000", "001", "011", "010", (-1.0, 0.0, 0.0)),
+        ("010", "011", "111", "110", (0.0, 1.0, 0.0)),
+        ("000", "100", "101", "001", (0.0, -1.0, 0.0)),
+        ("001", "101", "111", "011", (0.0, 0.0, 1.0)),
+        ("000", "010", "110", "100", (0.0, 0.0, -1.0)),
+    )
+    for a, b, c, d, normal in faces:
+        mesh.raw_quad(corners[a], corners[b], corners[c], corners[d], normal)
+    return mesh
 
 def _quad_auto(mesh: MeshData, a: Vec3, b: Vec3, c: Vec3, d: Vec3) -> None:
     """Add a quad, deriving the normal from the first three corners."""

@@ -13,6 +13,7 @@ from their own authoring space before handing vertices over.
 from __future__ import annotations
 
 import json
+import math
 import struct
 
 FLOAT = 5126
@@ -125,6 +126,8 @@ class GLB:
         material_index: int,
         *,
         extras: dict | None = None,
+        translation: tuple[float, float, float] | None = None,
+        rotation_y: float | None = None,
     ) -> int:
         if not positions or not indices:
             return -1
@@ -190,6 +193,11 @@ class GLB:
         )
         mesh_index = len(self._meshes) - 1
         node: dict = {"name": name, "mesh": mesh_index}
+        if translation:
+            node["translation"] = [round(value, 6) for value in translation]
+        if rotation_y is not None:
+            half = rotation_y / 2.0
+            node["rotation"] = [0.0, round(math.sin(half), 8), 0.0, round(math.cos(half), 8)]
         if extras:
             node["extras"] = extras
         self._nodes.append(node)
@@ -243,6 +251,13 @@ class GLB:
 
 
 # -------------------------------------------------------------------- helpers
+def _srgb_to_linear(channel: float) -> float:
+    """glTF colour factors are linear; palette colours are authored in sRGB."""
+    if channel <= 0.04045:
+        return channel / 12.92
+    return ((channel + 0.055) / 1.055) ** 2.4
+
+
 def _hex_to_rgb(value: str) -> tuple[float, float, float]:
     text = value.strip().lstrip("#")
     if len(text) == 3:
@@ -250,9 +265,9 @@ def _hex_to_rgb(value: str) -> tuple[float, float, float]:
     if len(text) != 6:
         raise ValueError(f"material colour must be #rgb or #rrggbb, got {value!r}")
     return (
-        int(text[0:2], 16) / 255.0,
-        int(text[2:4], 16) / 255.0,
-        int(text[4:6], 16) / 255.0,
+        _srgb_to_linear(int(text[0:2], 16) / 255.0),
+        _srgb_to_linear(int(text[2:4], 16) / 255.0),
+        _srgb_to_linear(int(text[4:6], 16) / 255.0),
     )
 
 
