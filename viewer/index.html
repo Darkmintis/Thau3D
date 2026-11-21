@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1210" />
+    <meta name="description" content="Walk through a building generated from a Thau3D spec." />
+    <link rel="icon" type="image/svg+xml" href="/mark.svg" />
+    <title>Thau3D · walk your place</title>
+  </head>
+  <body>
+    <main id="app">
+      <div id="viewport" aria-label="Interactive three dimensional building model"></div>
+
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Thau3D">
+          <img src="/mark.svg" alt="" width="32" height="32" />
+          <span class="brand-copy">
+            <strong>THAU3D</strong>
+            <small>DESCRIBE A PLACE · WALK IT</small>
+          </span>
+        </a>
+
+        <div class="topbar-actions">
+          <div class="segmented" role="group" aria-label="Lighting">
+            <button class="segment active" type="button" data-time="day">Day</button>
+            <button class="segment" type="button" data-time="night">Night</button>
+          </div>
+          <button class="ghost-button" id="lights-button" type="button" aria-pressed="false" title="Interior lights">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6m-5 3h4m-6-6.2a7 7 0 1 1 8 0c-.9.7-1.4 1.6-1.5 2.2h-5c-.1-.6-.6-1.5-1.5-2.2Z" /></svg>
+            <span id="lights-label">Lights off</span>
+          </button>
+          <button class="primary-button" id="walk-button" type="button" disabled>
+            <span>Walk inside</span>
+            <span aria-hidden="true">↗</span>
+          </button>
+          <button class="icon-button" id="fullscreen-button" type="button" aria-label="Enter fullscreen" title="Fullscreen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4M16 4h4v4M20 16v4h-4M4 16v4h4" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <aside class="panel" aria-label="Building overview">
+        <div class="panel-head">
+          <p class="eyebrow">THAU SPEC</p>
+          <h1 id="building-name">Loading…</h1>
+          <p class="stat-line" id="building-stat"></p>
+        </div>
+
+        <div class="panel-scroll">
+          <div class="section-head">
+            <span>SPACES</span>
+            <span id="space-total"></span>
+          </div>
+          <div id="space-list" class="space-list"></div>
+        </div>
+
+        <div class="panel-foot">
+          <span class="dot"></span>
+          <span id="status-label">Preparing model…</span>
+        </div>
+      </aside>
+
+      <div class="walk-hint" id="walk-hint">
+        <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span>
+        <span class="divider"></span><span>MOVE</span>
+        <span class="divider"></span><span>MOUSE LOOK</span>
+        <span class="divider"></span><span>SHIFT RUN · SPACE JUMP · ESC EXIT</span>
+      </div>
+
+      <div class="resume-card" id="resume-card" hidden>
+        <p>WALK PAUSED</p>
+        <button class="primary-button" id="resume-button" type="button"><span>Resume</span><span aria-hidden="true">↗</span></button>
+        <button class="ghost-button wide" id="exit-button" type="button">Back to overview</button>
+      </div>
+
+      <div class="touch-controls" id="touch-controls">
+        <div class="dpad">
+          <button type="button" data-move="forward" aria-label="Move forward">▲</button>
+          <button type="button" data-move="left" aria-label="Move left">◀</button>
+          <button type="button" data-move="back" aria-label="Move back">▼</button>
+          <button type="button" data-move="right" aria-label="Move right">▶</button>
+        </div>
+        <div class="touch-actions">
+          <button type="button" data-move="run" aria-label="Run">RUN</button>
+          <button type="button" id="jump-button" aria-label="Jump">JUMP</button>
+        </div>
+      </div>
+
+      <div class="loading" id="loading">
+        <div class="loading-mark"><img src="/mark.svg" alt="" /></div>
+        <p class="eyebrow">THAU3D · WALKTHROUGH</p>
+        <h2 id="loading-title">Opening your place…</h2>
+        <p id="loading-message">Reading the building manifest and geometry.</p>
+        <div class="progress"><span id="progress-bar"></span></div>
+        <p class="progress-caption" id="progress-caption">Starting</p>
+        <div class="error-actions" id="error-actions" hidden>
+          <button class="primary-button" id="retry-button" type="button"><span>Try again</span><span aria-hidden="true">↗</span></button>
+        </div>
+      </div>
+
+      <footer class="footnote">THAU3D · A CONCEPT MODEL, NOT CONSTRUCTION DOCUMENTATION</footer>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
