@@ -1,0 +1,105 @@
+{
+  "version": "0.1",
+  "name": "Kirtipur Terrace House",
+  "units": "ft",
+
+  "footprint": { "width": 26, "depth": 38 },
+
+  "defaults": {
+    "storeyHeight": 10,
+    "clearHeight": 9.25,
+    "slab": 0.6,
+    "exteriorWall": 0.75,
+    "interiorWall": 0.4,
+    "doorWidth": 2.75,
+    "doorHeight": 7.0,
+    "windowSill": 3.0,
+    "windowHead": 7.2
+  },
+
+  "site": {
+    "width": 40,
+    "depth": 56,
+    "surface": "ground",
+    "path": { "x": [3.5, 6.5], "from": -7, "to": 0 }
+  },
+
+  "entrance": { "space": "entry", "side": "front", "width": 3.6, "height": 7.4 },
+
+  "materials": {
+    "wall": "#F1ECE2",
+    "wall_inner": "#EFEAE0",
+    "floor": "#D6D1C6"
+  },
+
+  "storeys": [
+    {
+      "id": "ground",
+      "spaces": [
+        { "id": "entry", "type": "entry", "name": "Entry", "x": [0, 10], "y": [0, 12] },
+        { "id": "living", "type": "living", "name": "Living", "x": [10, 26], "y": [0, 12] },
+        { "id": "dining", "type": "dining", "name": "Dining", "x": [0, 10], "y": [12, 24] },
+        { "id": "kitchen", "type": "kitchen", "name": "Kitchen", "x": [10, 26], "y": [12, 24] },
+        { "id": "stair", "type": "stair", "name": "Stair", "x": [0, 10], "y": [24, 38] },
+        { "id": "study", "type": "study", "name": "Study", "x": [10, 26], "y": [24, 38] }
+      ]
+    },
+    {
+      "id": "first",
+      "spaces": [
+        { "id": "bedroom_one", "type": "bedroom", "name": "Bedroom 1", "x": [0, 10], "y": [0, 12] },
+        { "id": "bedroom_two", "type": "bedroom", "name": "Bedroom 2", "x": [10, 26], "y": [0, 12] },
+        { "id": "bath_one", "type": "bath", "name": "Bath 1", "x": [0, 10], "y": [12, 24] },
+        { "id": "master", "type": "bedroom", "name": "Master", "x": [10, 26], "y": [12, 24] },
+        { "id": "stair", "type": "stair", "name": "Stair", "x": [0, 10], "y": [24, 38] },
+        { "id": "lounge", "type": "lounge", "name": "Lounge", "x": [10, 26], "y": [24, 38] }
+      ]
+    },
+    {
+      "id": "second",
+      "spaces": [
+        { "id": "bedroom_three", "type": "bedroom", "name": "Bedroom 3", "x": [0, 10], "y": [0, 12] },
+        { "id": "family", "type": "lounge", "name": "Family Room", "x": [10, 26], "y": [0, 12] },
+        { "id": "bath_two", "type": "bath", "name": "Bath 2", "x": [0, 10], "y": [12, 24] },
+        { "id": "bedroom_four", "type": "bedroom", "name": "Bedroom 4", "x": [10, 26], "y": [12, 24] },
+        { "id": "stair", "type": "stair", "name": "Stair", "x": [0, 10], "y": [24, 38] },
+        { "id": "study_two", "type": "study", "name": "Study 2", "x": [10, 26], "y": [24, 38] }
+      ]
+    }
+  ],
+
+  "stairs": [
+    { "id": "to_first", "storey": "ground", "x": [1, 9], "y": [26, 36], "width": 4 },
+    { "id": "to_second", "storey": "first", "x": [1, 9], "y": [26, 36], "width": 4 },
+    { "id": "to_roof", "storey": "second", "x": [1, 9], "y": [26, 36], "width": 4 }
+  ],
+
+  "windows": [
+    { "space": "living", "side": "front", "width": 9, "sill": 2.5, "head": 7.6 },
+    { "space": "stair", "storey": "ground", "side": "left", "width": 4, "sill": 2.5, "head": 7.8 },
+    { "space": "stair", "storey": "first", "side": "left", "width": 4, "sill": 2.5, "head": 7.8 },
+    { "space": "stair", "storey": "second", "side": "left", "width": 4, "sill": 2.5, "head": 7.8 },
+    { "space": "kitchen", "side": "right", "width": 8, "sill": 3.2, "head": 7.4 },
+    { "space": "study", "side": "back", "width": 6, "sill": 3.2, "head": 7.2 },
+    { "space": "bedroom_one", "side": "front", "width": 5, "sill": 3.0, "head": 7.2 },
+    { "space": "bedroom_two", "side": "front", "width": 9, "sill": 2.6, "head": 7.6 },
+    { "space": "bath_one", "side": "left", "width": 2.5, "sill": 4.0, "head": 7.0 },
+    { "space": "master", "side": "right", "width": 6, "sill": 3.0, "head": 7.4 },
+    { "space": "lounge", "side": "back", "width": 7, "sill": 2.6, "head": 7.4 },
+    { "space": "bedroom_three", "side": "front", "width": 5, "sill": 3.0, "head": 7.2 },
+    { "space": "family", "side": "front", "width": 8, "sill": 2.6, "head": 7.6 },
+    { "space": "bath_two", "side": "left", "width": 2.5, "sill": 4.0, "head": 7.0 },
+    { "space": "bedroom_four", "side": "right", "width": 6, "sill": 3.0, "head": 7.4 },
+    { "space": "study_two", "side": "back", "width": 6, "sill": 3.2, "head": 7.2 }
+  ],
+
+  "doors": [
+    { "between": ["entry", "living"], "width": 3.2 },
+    { "between": ["entry", "dining"], "width": 2.8 },
+    { "between": ["living", "kitchen"], "width": 3.0 },
+    { "between": ["dining", "kitchen"], "width": 3.0 },
+    { "between": ["stair", "dining"], "width": 2.75 }
+  ],
+
+  "roof": { "type": "terrace", "parapet": 3.2 }
+}
