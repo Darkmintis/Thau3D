@@ -67,13 +67,16 @@ class BuildTest(unittest.TestCase):
         self.assertGreater(len(self.manifest["supports"]), 30)
         self.assertEqual(len(self.manifest["stairs"]), 3)
 
-    def test_spawn_sits_inside_a_space(self):
+    def test_spawn_waits_outside_the_front_door(self):
         spawn = self.manifest["spawn"]
         space = next(item for item in self.manifest["spaces"] if item["id"] == spawn["space"])
         x, _y, z = spawn["position"]
-        x0, y0, x1, y1 = space["rect"]
-        self.assertTrue(x0 <= x <= x1, "spawn x outside its space")
-        self.assertTrue(-y1 <= z <= -y0, "spawn z outside its space")
+        x0, _y0, x1, _y1 = space["rect"]
+        self.assertTrue(x0 <= x <= x1, "spawn should line up with the door")
+        # the front elevation is z = 0, so standing outside means z > 0
+        self.assertGreater(z, 0.0)
+        self.assertLess(z, 3.0)
+        self.assertAlmostEqual(spawn["yaw"], 0.0, places=2)
 
     def test_stairs_climb_a_full_storey(self):
         storeys = {storey["id"]: storey for storey in self.manifest["storeys"]}

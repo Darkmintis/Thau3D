@@ -19,6 +19,18 @@ from .materials import resolve_overrides
 from .spec import Building, Space, Stair, Storey, balcony_rect, stair_flight
 
 EYE_HEIGHT = 1.62
+
+# rooms that connect the plan; a wall between two private rooms stays solid
+CIRCULATION_TYPES = {"hall", "landing", "entry", "stair", "living", "lounge", "dining", "kitchen", "office"}
+
+# a door between these would be a design mistake, whatever the adjacency says
+NO_DOOR_PAIRS = {
+    ("kitchen", "bath"),
+    ("kitchen", "wc"),
+    ("dining", "bath"),
+    ("dining", "wc"),
+    ("living", "bath"),
+}
 EPS = 1e-4
 
 
@@ -86,6 +98,8 @@ class Builder:
         self.balconies_manifest: list[dict] = []
         self.door_clearance: dict[str, list[tuple[float, float, float, float]]] = {}
         self.furniture_zones: dict[str, list[tuple[float, float, float, float]]] = {}
+        self.space_windows: dict[str, set[str]] = {}
+        self._openings_cache: dict[str, dict[str, list[dict]]] = {}
         self.warnings: list[str] = []
         self._material_index: dict[str, int] = {}
         self._counters: dict[str, int] = {}
@@ -409,6 +423,37 @@ class Builder:
                     "",
                     support="concrete",
                 )
+        border = float(site.get("border", 1.0))
+        if border > 0:
+            span_x = width / 2.0
+            span_y = depth / 2.0
+            edge_x0, edge_x1 = centre_x - span_x, centre_x + span_x
+            edge_y0, edge_y1 = centre_y - span_y, centre_y + span_y
+            thickness = 0.18
+            gate = (site.get("path") or {}).get("x")
+            runs = [
+                ((edge_x0, edge_y1), (edge_x1, edge_y1)),
+                ((edge_x0, edge_y0), (edge_x0, edge_y1)),
+                ((edge_x1, edge_y0), (edge_x1, edge_y1)),
+            ]
+            if gate:
+                gap0, gap1 = float(gate[0]) - 0.6, float(gate[1]) + 0.6
+                runs.append(((edge_x0, edge_y0), (gap0, edge_y0)))
+                runs.append(((gap1, edge_y0), (edge_x1, edge_y0)))
+            else:
+                runs.append(((edge_x0, edge_y0), (edge_x1, edge_y0)))
+            for index, (start_point, end_point) in enumerate(runs):
+                self.wall_run(
+                    f"site_wall_{index}",
+                    start_point,
+                    end_point,
+                    thickness,
+                    ground_y,
+                    border,
+                    [],
+                    "stone",
+                    "",
+                )
         path = site.get("path") or {}
         if path:
             x = path.get("x") or [self.b.width * 0.45, self.b.width * 0.55]
@@ -583,7 +628,7 @@ class Builder:
 
     def build_exterior_walls(self, storey: Storey) -> None:
         sides = self._side_geometry()
-        openings = self.exterior_openings(storey)
+        openings = self._openings_cache.get(storey.id) or self.exterior_openings(storey)
         thickness = self.b.defaults["exteriorWall"]
         base = storey.base
         for side, (start, end, _axis) in sides.items():
@@ -617,15 +662,37 @@ class Builder:
                     continue
 
                 door = self._door_for(first.id, second.id)
+                both_private = (
+                    first.type not in CIRCULATION_TYPES and second.type not in CIRCULATION_TYPES
+                )
+                if door is None and (both_private or (first.type, second.type) in NO_DOOR_PAIRS or (second.type, first.type) in NO_DOOR_PAIRS):
+                    # two private rooms back onto each other: solid wall, no opening
+                    self.wall_run(
+                        f"party_{first.id}_{second.id}",
+                        (start, line) if kind == "h" else (line, start),
+                        (end, line) if kind == "h" else (line, end),
+                        thickness,
+                        storey.base,
+                        storey.clear,
+                        [],
+                        "wall_inner",
+                        storey.id,
+                    )
+                    continue
+
+                both_circulation = (
+                    door is None
+                    and first.type in CIRCULATION_TYPES
+                    and second.type in CIRCULATION_TYPES
+                )
                 width = min(door.width if door else door_default, max(0.5, span - 0.3))
+                if both_circulation:
+                    # an open passage between living, dining and kitchen
+                    width = min(max(1.7, width), max(0.5, span - 0.3))
                 height = door.height if door else door_height
                 offset = door.offset if door else 0.0
                 centre = self._door_centre(first, second, kind, line, start, end, width, offset)
                 if centre is None:
-                    self.warnings.append(
-                        f"{first.id}/{second.id}: no clear stretch of wall for a door; "
-                        "furniture is in the way on both sides"
-                    )
                     continue
                 t0 = centre - width / 2.0 - start
                 t1 = t0 + width
@@ -675,6 +742,8 @@ class Builder:
                     hinge = (line, start + t0)
                     along = (0.0, 1.0)
                     swing = (-1.0, 0.0) if larger.center[0] < line else (1.0, 0.0)
+                if both_circulation:
+                    continue
                 self.door_leaf(
                     f"door_{first.id}_{second.id}",
                     storey,
@@ -1128,16 +1197,15 @@ class Builder:
 
     # -------------------------------------------------------------- furniture
     def build_furniture(self, storey: Storey) -> None:
+        """Place furniture first and remember its footprints, so doors can avoid it."""
         for space in storey.spaces:
-            pieces = furnish(space, storey.base + 0.02, storey.clear)
-            zones = self.door_clearance.get(space.id, [])
-            dropped = 0
+            pieces = furnish(
+                space,
+                storey.base + 0.02,
+                storey.clear,
+                glazed_sides=self.space_windows.get(space.id, set()),
+            )
             for piece in pieces:
-                if piece.blocks and zones:
-                    plan = self._plan_bounds(piece.mesh)
-                    if any(_rects_overlap(plan, zone) for zone in zones):
-                        dropped += 1
-                        continue
                 self.emit(
                     self.name(piece.material, storey.id),
                     piece.mesh,
@@ -1146,10 +1214,8 @@ class Builder:
                     collider="furniture" if piece.blocks else None,
                     extras={"space": space.id, "furniture": True},
                 )
-            if dropped:
-                self.warnings.append(
-                    f"{space.id}: moved {dropped} furniture piece(s) clear of a doorway"
-                )
+                if piece.blocks:
+                    self.furniture_zones.setdefault(space.id, []).append(self._plan_bounds(piece.mesh))
 
     @staticmethod
     def _plan_bounds(mesh: MeshData) -> tuple[float, float, float, float]:
@@ -1202,6 +1268,13 @@ class Builder:
                 self.slab(storey.id, slab, storey.base, hole, "slab", "floor")
             self.build_edge_band(storey, "stone" if storey.index == 0 else "slab")
             self.build_floor_finish(storey)
+            # decide the openings once, so furniture knows which walls are glazed
+            self._openings_cache[storey.id] = self.exterior_openings(storey)
+            for side, items in self._openings_cache[storey.id].items():
+                for item in items:
+                    space_id = item.get("space")
+                    if space_id:
+                        self.space_windows.setdefault(space_id, set()).add(side)
             # furniture first: doors then place themselves around it, not through it
             self.build_furniture(storey)
             self.build_exterior_walls(storey)
@@ -1263,24 +1336,36 @@ class Builder:
         return report
 
     def _spawn(self) -> dict:
-        """Start in the biggest room on the ground floor, looking down its length."""
+        """Start on the pavement outside the front door, facing into the house."""
         ground = self.b.storeys[0]
+        entrance = self.b.entrance
+        space = self.b.space(entrance["space"]) if entrance["space"] else None
+        if space is not None and space.storey == ground.id:
+            side = entrance["side"]
+            if side in ("front", "back"):
+                door_x = (space.x0 + space.x1) / 2.0
+                outside = -2.4 if side == "front" else self.b.depth + 2.4
+                return {
+                    "position": [door_x, ground.base - 0.15 + EYE_HEIGHT, -outside],
+                    "yaw": 0.0 if side == "front" else math.pi,
+                    "space": space.id,
+                }
+            door_y = (space.y0 + space.y1) / 2.0
+            outside = -2.4 if side == "left" else self.b.width + 2.4
+            return {
+                "position": [outside, ground.base - 0.15 + EYE_HEIGHT, -door_y],
+                "yaw": -math.pi / 2.0 if side == "left" else math.pi / 2.0,
+                "space": space.id,
+            }
+
         candidates = [space for space in ground.spaces if space.type not in ("stair", "store", "garage")]
-        preferred = ["living", "lounge", "dining", "kitchen", "entry", "study", "office"]
-        space = None
-        for kind in preferred:
-            match = next((item for item in candidates if item.type == kind), None)
-            if match is not None:
-                space = match
-                break
-        if space is None:
-            space = max(candidates or ground.spaces, key=lambda item: item.area)
-        x = space.x0 + space.width * 0.22
-        y = space.y0 + space.depth * 0.22
-        dx = space.width * 0.56
-        dz = -space.depth * 0.56
-        yaw = math.atan2(-dx, -dz)
-        return {"position": [x, ground.base + EYE_HEIGHT, -y], "yaw": yaw, "space": space.id}
+        space = max(candidates or ground.spaces, key=lambda item: item.area)
+        centre_x, centre_y = space.center
+        return {
+            "position": [centre_x, ground.base + EYE_HEIGHT, -centre_y],
+            "yaw": 0.0,
+            "space": space.id,
+        }
 
     # ---------------------------------------------------------------- output
     def export(self, out_dir: str | Path, stem: str) -> BuildReport:

@@ -27,11 +27,22 @@ class Piece:
 class Furnisher:
     """Small helper so the room recipes below stay readable."""
 
-    def __init__(self, space: Space, base_z: float, clear: float) -> None:
+    def __init__(self, space: Space, base_z: float, clear: float, glazed_sides: set[str] | None = None) -> None:
         self.space = space
         self.base = base_z
         self.clear = clear
         self.pieces: list[Piece] = []
+        self.glazed = glazed_sides or set()
+
+    @property
+    def tv_at_front(self) -> bool:
+        """A television belongs on a solid wall, never under a window."""
+        return "front" not in self.glazed
+
+    @property
+    def head_at_back(self) -> bool:
+        """A headboard belongs on a solid wall, never under a window."""
+        return "back" not in self.glazed
 
     # -- primitives ---------------------------------------------------------
     def block(
@@ -102,69 +113,82 @@ class Furnisher:
 def _bedroom(f: Furnisher) -> None:
     bed_w = min(1.65, max(1.2, f.width * 0.42))
     bed_d = min(2.05, max(1.85, f.depth * 0.42))
-    head_y = f.space.y1 - 0.16
-    bed_cy = head_y - bed_d / 2.0 - 0.06
+    back = f.head_at_back
+    sign = -1.0 if back else 1.0  # +1 means the bed runs toward +y
+    head_y = (f.space.y1 - 0.16) if back else (f.space.y0 + 0.16)
+    bed_cy = head_y + sign * (bed_d / 2.0 + 0.06)
     bed_cx = f.cx
 
     f.block("bed_base", (bed_cx, bed_cy), (bed_w, bed_d, 0.32), "oak", z=0.06)
     f.block("bed_mattress", (bed_cx, bed_cy), (bed_w - 0.08, bed_d - 0.08, 0.24), "linen", z=0.38)
-    f.block("bed_duvet", (bed_cx, bed_cy - 0.16), (bed_w - 0.02, bed_d - 0.6, 0.1), "bedding", z=0.62)
-    f.block("bed_throw", (bed_cx, bed_cy - bed_d / 2.0 + 0.32), (bed_w - 0.02, 0.5, 0.08), "throw", z=0.66)
+    f.block("bed_duvet", (bed_cx, bed_cy + sign * 0.16), (bed_w - 0.02, bed_d - 0.6, 0.1), "bedding", z=0.62)
+    f.block("bed_throw", (bed_cx, bed_cy + sign * (bed_d / 2.0 - 0.32)), (bed_w - 0.02, 0.5, 0.08), "throw", z=0.66)
     f.block("bed_headboard", (bed_cx, head_y), (bed_w + 0.2, 0.09, 1.1), "walnut", z=0.0)
     for index, offset in enumerate((-0.28, 0.28)):
         f.block(
-            f"pillow_{index}",
-            (bed_cx + offset * bed_w, head_y - 0.42),
+            f"bed_pillow_{index}",
+            (bed_cx + offset * bed_w, head_y + sign * 0.42),
             (bed_w * 0.42, 0.34, 0.14),
             "linen",
             z=0.62,
         )
 
-    for side, sign in (("l", -1.0), ("r", 1.0)):
-        nx = bed_cx + sign * (bed_w / 2.0 + 0.34)
+    for side, side_sign in (("l", -1.0), ("r", 1.0)):
+        nx = bed_cx + side_sign * (bed_w / 2.0 + 0.34)
         if f.space.x0 + 0.3 < nx < f.space.x1 - 0.3:
-            f.block(f"nightstand_{side}", (nx, head_y - 0.28), (0.42, 0.38, 0.52), "oak")
-            f.round(f"lamp_{side}", (nx, head_y - 0.28), 0.09, 0.3, "led", z=0.55, blocks=False)
-            f.block(f"lamp_stem_{side}", (nx, head_y - 0.28), (0.03, 0.03, 0.16), "metal", z=0.52, blocks=False)
+            f.block(f"nightstand_{side}", (nx, head_y + sign * 0.28), (0.42, 0.38, 0.52), "oak")
+            f.round(f"nightstand_lamp_{side}", (nx, head_y + sign * 0.28), 0.09, 0.3, "led", z=0.55, blocks=False)
+            f.block(f"nightstand_stem_{side}", (nx, head_y + sign * 0.28), (0.03, 0.03, 0.16), "metal", z=0.52, blocks=False)
 
     wardrobe_w = min(1.8, f.width * 0.5)
     f.block("wardrobe", (f.space.x0 + wardrobe_w / 2.0 + 0.2, f.cy), (wardrobe_w, 0.6, 2.3), "oak_light")
-    f.block("wardrobe_shadow_gap", (f.space.x0 + wardrobe_w / 2.0 + 0.2, f.cy - 0.31), (wardrobe_w - 0.1, 0.02, 2.1), "walnut", z=0.1, blocks=False)
+    f.block(
+        "wardrobe_gap",
+        (f.space.x0 + wardrobe_w / 2.0 + 0.2, f.cy - 0.31),
+        (wardrobe_w - 0.1, 0.02, 2.1),
+        "walnut",
+        z=0.1,
+        blocks=False,
+    )
 
     f.rug(min(2.6, f.width * 0.7), min(1.8, f.depth * 0.35))
 
 
-# ------------------------------------------------------------------ living
 def _living(f: Furnisher) -> None:
+    # TV goes on a wall without a window; the sofa faces it.
+    sign = 1.0 if f.tv_at_front else -1.0
+    sofa_wall = f.space.y1 if sign > 0 else f.space.y0
+    sofa_y = sofa_wall - sign * 0.62
     sofa_w = min(2.5, max(1.8, f.width * 0.55))
-    sofa_y = f.space.y1 - 0.62
+
     f.block("sofa_base", (f.cx, sofa_y), (sofa_w, 0.92, 0.42), "fabric_ivory", z=0.0)
-    f.block("sofa_back", (f.cx, sofa_y + 0.36), (sofa_w, 0.2, 0.82), "fabric_ivory", z=0.0)
-    f.block("sofa_seat", (f.cx, sofa_y - 0.1), (sofa_w - 0.16, 0.72, 0.14), "linen_dark", z=0.42)
+    f.block("sofa_back", (f.cx, sofa_y + sign * 0.36), (sofa_w, 0.2, 0.82), "fabric_ivory", z=0.0)
+    f.block("sofa_seat", (f.cx, sofa_y - sign * 0.1), (sofa_w - 0.16, 0.72, 0.14), "linen_dark", z=0.42)
     for index, offset in enumerate((-0.22, 0.22)):
         f.block(
-            f"cushion_{index}",
-            (f.cx + offset * sofa_w, sofa_y + 0.2),
+            f"sofa_cushion_{index}",
+            (f.cx + offset * sofa_w, sofa_y + sign * 0.2),
             (0.4, 0.14, 0.4),
             "fabric_sage" if index else "fabric_clay",
             z=0.56,
         )
-    for side, sign in (("l", -1.0), ("r", 1.0)):
-        f.block(f"sofa_arm_{side}", (f.cx + sign * sofa_w / 2.0, sofa_y), (0.14, 0.92, 0.62), "fabric_ivory", z=0.0)
+    for side, side_sign in (("l", -1.0), ("r", 1.0)):
+        f.block(f"sofa_arm_{side}", (f.cx + side_sign * sofa_w / 2.0, sofa_y), (0.14, 0.92, 0.62), "fabric_ivory", z=0.0)
 
     table_z = 0.38
-    f.block("coffee_table", (f.cx, sofa_y - 1.5), (1.2, 0.62, 0.06), "oak_light", z=table_z)
+    table_y = sofa_y - sign * 1.5
+    f.block("coffee_table", (f.cx, table_y), (1.2, 0.62, 0.06), "oak_light", z=table_z)
     for index, (dx, dy) in enumerate(((-0.5, -0.24), (0.5, -0.24), (-0.5, 0.24), (0.5, 0.24))):
-        f.block(f"coffee_table_leg_{index}", (f.cx + dx, sofa_y - 1.5 + dy), (0.05, 0.05, table_z), "metal", blocks=False)
+        f.block(f"coffee_table_leg_{index}", (f.cx + dx, table_y + dy), (0.05, 0.05, table_z), "metal", blocks=False)
 
-    tv_y = f.space.y0 + 0.35
+    tv_y = (f.space.y0 + 0.35) if sign > 0 else (f.space.y1 - 0.35)
     f.block("media_console", (f.cx, tv_y), (min(1.9, f.width * 0.6), 0.4, 0.46), "walnut")
-    f.block("tv_panel", (f.cx, f.space.y0 + 0.12), (min(1.45, f.width * 0.5), 0.06, 0.82), "appliance", z=0.9, blocks=False)
+    tv_panel_y = tv_y - sign * 0.23
+    f.block("tv_panel", (f.cx, tv_panel_y), (min(1.45, f.width * 0.5), 0.06, 0.82), "appliance", z=0.9, blocks=False)
 
     f.rug(min(2.9, f.width * 0.8), min(2.0, f.depth * 0.42))
 
 
-# ----------------------------------------------------------------- kitchen
 def _kitchen(f: Furnisher) -> None:
     run_w = f.width - 0.3
     counter_y = f.space.y1 - 0.32
@@ -302,12 +326,12 @@ RECIPES = {
 }
 
 
-def furnish(space: Space, base_z: float, clear: float) -> list[Piece]:
+def furnish(space: Space, base_z: float, clear: float, glazed_sides: set[str] | None = None) -> list[Piece]:
     recipe = RECIPES.get(space.type)
     if recipe is None or space.type in ("stair", "store"):
         return []
     if space.area < 2.0:
         return []
-    furnisher = Furnisher(space, base_z, clear)
+    furnisher = Furnisher(space, base_z, clear, glazed_sides)
     recipe(furnisher)
     return furnisher.pieces
