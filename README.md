@@ -60,6 +60,19 @@ From that, the builder derives: exterior walls with window and door openings, pa
 
 See [`docs/SPEC.md`](docs/SPEC.md) for every field, and [`schema/thau.schema.json`](schema/thau.schema.json) for editor autocomplete.
 
+## I only want the models
+
+```bash
+pnpm model     # rebuild viewer/public/models from both examples
+```
+
+Or drive the CLI directly from the repo root:
+
+```bash
+python -m thau3d validate examples/housewalk/house.thau.json
+python -m thau3d build    examples/housewalk/house.thau.json -o viewer/public/models
+```
+
 ## CLI
 
 | Command | What it does |

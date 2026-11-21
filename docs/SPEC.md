@@ -86,6 +86,8 @@ Space `id`s only need to be unique within a storey, so `stair` can appear on all
 
 `surface` picks the ground material: `earth`, `grass`, `gravel`, `paving` or `concrete`. The chosen colour is written into the manifest so the viewer's horizon plane matches the plot exactly, which is what stops a building floating in a void.
 
+`apron` is the concrete band that rings the building (default 3 units, `0` to turn it off). It is what gives a house a hard edge against the soft ground, and it is walkable.
+
 ## How walls are derived
 
 **Exterior walls** run the full perimeter of the footprint, `defaults.exteriorWall` thick, centred on the boundary. Each elevation is split into solid segments around its openings.
