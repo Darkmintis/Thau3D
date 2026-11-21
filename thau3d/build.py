@@ -1144,7 +1144,7 @@ class Builder:
                     piece.material,
                     storey.id,
                     collider="furniture" if piece.blocks else None,
-                    extras={"space": space.id},
+                    extras={"space": space.id, "furniture": True},
                 )
             if dropped:
                 self.warnings.append(

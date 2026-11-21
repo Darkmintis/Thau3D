@@ -30,6 +30,8 @@ const els = {
   walkButton: $('#walk-button'),
   lightsButton: $('#lights-button'),
   lightsLabel: $('#lights-label'),
+  furnitureButton: $('#furniture-button'),
+  furnitureLabel: $('#furniture-label'),
   resume: $('#resume-card'),
   loading: $('#loading'),
   progressBar: $('#progress-bar'),
@@ -46,6 +48,7 @@ const state = {
   nightBlend: 0,
   nightTarget: 0,
   lightsOn: false,
+  furniture: true,
   lightBlend: 0,
   lightTarget: 0,
   isolatedStorey: null,
@@ -503,8 +506,18 @@ function applyStoreyFilter(storeyId) {
   model.traverse((object) => {
     if (!object.isMesh) return;
     const id = object.userData.storey || '';
-    object.visible = !storeyId || id === '' || id === storeyId;
+    const storeyVisible = !storeyId || id === '' || id === storeyId;
+    const furnitureVisible = state.furniture || !object.userData.furniture;
+    object.visible = storeyVisible && furnitureVisible;
   });
+}
+
+function setFurniture(visible) {
+  state.furniture = visible;
+  applyStoreyFilter(state.isolatedStorey);
+  els.furnitureButton.setAttribute('aria-pressed', String(visible));
+  els.furnitureLabel.textContent = visible ? 'Furniture on' : 'Empty house';
+  els.furnitureButton.title = visible ? 'Hide the furniture (F)' : 'Show the furniture (F)';
 }
 
 function focusSpace(space) {
@@ -606,6 +619,7 @@ function collidesAt(x, z, footY) {
   const bodyMin = footY + 0.1;
   const bodyMax = footY + BODY;
   for (const box of state.manifest.colliders) {
+    if (!state.furniture && box.tag === 'furniture') continue;
     if (box.max[1] <= bodyMin || box.min[1] >= bodyMax) continue;
     if (x + RADIUS > box.min[0] && x - RADIUS < box.max[0] && z + RADIUS > box.min[2] && z - RADIUS < box.max[2]) {
       return true;
@@ -804,6 +818,12 @@ for (const button of document.querySelectorAll('[data-time]')) {
   button.addEventListener('click', () => setTime(button.dataset.time));
 }
 els.lightsButton.addEventListener('click', () => setLights(!state.lightsOn));
+els.furnitureButton.addEventListener('click', () => setFurniture(!state.furniture));
+window.addEventListener('keydown', (event) => {
+  if (event.code !== 'KeyF' || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.target instanceof HTMLInputElement) return;
+  setFurniture(!state.furniture);
+});
 els.walkButton.addEventListener('click', () => {
   if (state.mode === 'walk') exitWalk();
   else enterWalk();

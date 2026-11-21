@@ -30,6 +30,10 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6m-5 3h4m-6-6.2a7 7 0 1 1 8 0c-.9.7-1.4 1.6-1.5 2.2h-5c-.1-.6-.6-1.5-1.5-2.2Z" /></svg>
             <span id="lights-label">Lights off</span>
           </button>
+          <button class="ghost-button" id="furniture-button" type="button" aria-pressed="true" title="Show or hide the furniture (F)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12V8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4M3 13a2 2 0 0 1 2-2h0a2 2 0 0 1 2 2v2h10v-2a2 2 0 0 1 2-2h0a2 2 0 0 1 2 2v4H3v-4Z" /></svg>
+            <span id="furniture-label">Furniture on</span>
+          </button>
           <button class="primary-button" id="walk-button" type="button" disabled>
             <span>Walk inside</span>
             <span aria-hidden="true">↗</span>
@@ -65,7 +69,7 @@
         <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span>
         <span class="divider"></span><span>MOVE</span>
         <span class="divider"></span><span>MOUSE LOOK</span>
-        <span class="divider"></span><span>SHIFT RUN · SPACE JUMP · ESC EXIT</span>
+        <span class="divider"></span><span>SHIFT RUN · SPACE JUMP · F EMPTY</span><span class="divider"></span><span>ESC EXIT</span>
       </div>
 
       <div class="resume-card" id="resume-card" hidden>
