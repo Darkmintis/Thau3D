@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thau3d.dev/schema/0.1/thau.schema.json",
+  "title": "Thau3D building spec",
+  "description": "A room-first description of a building. The builder derives walls, doors, windows, slabs and stairs from how the spaces touch each other.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "footprint", "storeys"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": "0.1" },
+    "name": { "type": "string", "description": "Human readable building name." },
+    "units": {
+      "enum": ["ft", "m"],
+      "default": "ft",
+      "description": "Units for every length in this file. Internally converted to metres."
+    },
+    "footprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "depth"],
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "description": "Extent along x, from the left party wall." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "description": "Extent along y, from the street elevation." }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Storey and opening dimensions. Values use the spec units.",
+      "properties": {
+        "storeyHeight": { "type": "number", "default": 10, "description": "Floor-to-floor height." },
+        "clearHeight": { "type": "number", "default": 9.25, "description": "Floor-to-ceiling clear height." },
+        "slab": { "type": "number", "default": 0.6 },
+        "exteriorWall": { "type": "number", "default": 0.75 },
+        "interiorWall": { "type": "number", "default": 0.375 },
+        "doorWidth": { "type": "number", "default": 2.75 },
+        "doorHeight": { "type": "number", "default": 7 },
+        "windowSill": { "type": "number", "default": 3 },
+        "windowHead": { "type": "number", "default": 7.2 }
+      }
+    },
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "number" },
+        "depth": { "type": "number" },
+        "surface": { "enum": ["ground", "paving", "asphalt"], "default": "ground" },
+        "path": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+            "from": { "type": "number" },
+            "to": { "type": "number" }
+          }
+        }
+      }
+    },
+    "entrance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "space": { "type": "string", "description": "Space id the front door opens into." },
+        "side": { "enum": ["front", "back", "left", "right"], "default": "front" },
+        "width": { "type": "number", "default": 3.5 },
+        "height": { "type": "number", "default": 7.2 }
+      }
+    },
+    "materials": {
+      "type": "object",
+      "description": "Colour overrides keyed by palette name, e.g. {\"wall\": \"#f1ece2\"}.",
+      "additionalProperties": { "type": "string", "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" }
+    },
+    "storeys": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "spaces"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+          "height": { "type": "number", "description": "Floor-to-floor override for this storey." },
+          "clear": { "type": "number" },
+          "spaces": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "type", "x", "y"],
+              "properties": {
+                "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+                "name": { "type": "string" },
+                "type": {
+                  "enum": [
+                    "living", "lounge", "bedroom", "kitchen", "dining", "bath", "wc",
+                    "hall", "stair", "entry", "study", "office", "utility",
+                    "terrace", "balcony", "garage", "store"
+                  ]
+                },
+                "x": {
+                  "type": "array",
+                  "items": { "type": "number" },
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "description": "[x0, x1] extents in plan."
+                },
+                "y": {
+                  "type": "array",
+                  "items": { "type": "number" },
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "description": "[y0, y1] extents in plan."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stairs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "storey", "x", "y"],
+        "properties": {
+          "id": { "type": "string" },
+          "storey": { "type": "string", "description": "Storey the flight starts on." },
+          "x": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+          "y": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+          "form": { "enum": ["u", "straight"], "default": "u" },
+          "width": { "type": "number", "default": 4 }
+        }
+      }
+    },
+    "windows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["space", "side"],
+        "properties": {
+          "space": { "type": "string" },
+          "side": { "enum": ["front", "back", "left", "right"] },
+          "width": { "type": "number", "default": 5 },
+          "sill": { "type": "number" },
+          "head": { "type": "number" },
+          "offset": { "type": "number", "default": 0 }
+        }
+      }
+    },
+    "doors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["between"],
+        "properties": {
+          "between": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 },
+          "width": { "type": "number" },
+          "height": { "type": "number" },
+          "offset": { "type": "number", "default": 0 }
+        }
+      }
+    },
+    "roof": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["terrace", "flat"], "default": "terrace" },
+        "parapet": { "type": "number", "default": 3 },
+        "overhang": { "type": "number", "default": 0.6 }
+      }
+    }
+  }
+}
