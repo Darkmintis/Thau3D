@@ -119,6 +119,59 @@ def box(center: Vec3, size: Vec3, yaw: float = 0.0) -> MeshData:
     return mesh
 
 
+def _quad_auto(mesh: MeshData, a: Vec3, b: Vec3, c: Vec3, d: Vec3) -> None:
+    """Add a quad, deriving the normal from the first three corners."""
+    normal = _cross(_subtract(b, a), _subtract(c, a))
+    length = math.sqrt(_dot(normal, normal)) or 1.0
+    mesh.quad(a, b, c, d, (normal[0] / length, normal[1] / length, normal[2] / length))
+
+
+def wedge(
+    x0: float,
+    x1: float,
+    y0: float,
+    y1: float,
+    z_bottom: float,
+    z_low: float,
+    z_high: float,
+    high_side: str,
+) -> MeshData:
+    """A solid block whose top slopes from ``z_high`` at one edge to ``z_low`` at the other.
+
+    ``high_side`` is one of ``x0``, ``x1``, ``y0``, ``y1`` - the edge the ridge sits on.
+    Used for shed and gable roofs.
+    """
+    mesh = MeshData()
+
+    def top_height(x: float, y: float) -> float:
+        if high_side == "y0":
+            t = 0.0 if abs(y1 - y0) < 1e-9 else (y - y0) / (y1 - y0)
+        elif high_side == "y1":
+            t = 0.0 if abs(y1 - y0) < 1e-9 else (y1 - y) / (y1 - y0)
+        elif high_side == "x0":
+            t = 0.0 if abs(x1 - x0) < 1e-9 else (x - x0) / (x1 - x0)
+        else:
+            t = 0.0 if abs(x1 - x0) < 1e-9 else (x1 - x) / (x1 - x0)
+        return z_high + (z_low - z_high) * t
+
+    corners = {
+        "00": (x0, y0),
+        "10": (x1, y0),
+        "11": (x1, y1),
+        "01": (x0, y1),
+    }
+    bottom = {key: (px, py, z_bottom) for key, (px, py) in corners.items()}
+    top = {key: (px, py, top_height(px, py)) for key, (px, py) in corners.items()}
+
+    _quad_auto(mesh, bottom["00"], bottom["10"], bottom["11"], bottom["01"])
+    _quad_auto(mesh, top["00"], top["10"], top["11"], top["01"])
+    _quad_auto(mesh, bottom["00"], bottom["01"], top["01"], top["00"])
+    _quad_auto(mesh, bottom["10"], top["10"], top["11"], bottom["11"])
+    _quad_auto(mesh, bottom["00"], top["00"], top["10"], bottom["10"])
+    _quad_auto(mesh, bottom["01"], bottom["11"], top["11"], top["01"])
+    return mesh
+
+
 def cylinder(
     center: Vec3,
     radius: float,
