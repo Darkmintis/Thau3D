@@ -62,7 +62,7 @@ class BuildTest(unittest.TestCase):
         for key in ("storeys", "spaces", "stairs", "colliders", "supports", "luminaires", "spawn", "bounds"):
             self.assertIn(key, self.manifest)
         self.assertEqual(len(self.manifest["storeys"]), 3)
-        self.assertEqual(len(self.manifest["spaces"]), 18)
+        self.assertEqual(len(self.manifest["spaces"]), 20)
         self.assertGreater(len(self.manifest["colliders"]), 100)
         self.assertGreater(len(self.manifest["supports"]), 30)
         self.assertEqual(len(self.manifest["stairs"]), 3)
