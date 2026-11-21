@@ -284,7 +284,9 @@ async function loadModel() {
     });
     scene.add(model);
 
+    collectDoors(model);
     buildLights(manifest.luminaires || []);
+    addHorizon(manifest);
     frameBuilding(manifest);
     buildPanel(manifest);
     applyStoreyFilter(null);
@@ -309,6 +311,29 @@ async function loadModel() {
 $('#retry-button').addEventListener('click', () => location.reload());
 
 // ------------------------------------------------------------------- lights
+// ------------------------------------------------------------------- doors
+const doors = [];
+
+function collectDoors(root) {
+  root.traverse((object) => {
+    const data = object.userData;
+    if (!data || !data.door) return;
+    doors.push({ object, closed: Number(data.closed) || 0, open: Number(data.open) || 0 });
+  });
+}
+
+function updateDoors(delta) {
+  if (!doors.length) return;
+  const walking = state.mode === 'walk';
+  for (const door of doors) {
+    const dx = camera.position.x - door.object.position.x;
+    const dz = camera.position.z - door.object.position.z;
+    const near = walking && dx * dx + dz * dz < 6.25;
+    const target = near ? door.open : door.closed;
+    door.object.rotation.y = THREE.MathUtils.damp(door.object.rotation.y, target, 7, delta);
+  }
+}
+
 let luminaires = [];
 
 function buildLights(entries) {
@@ -319,6 +344,25 @@ function buildLights(entries) {
     scene.add(light);
     return light;
   });
+}
+
+// ------------------------------------------------------------- horizon ground
+let horizon = null;
+
+function addHorizon(manifest) {
+  const site = manifest.site || {};
+  const groundY = Array.isArray(site.max) ? site.max[1] : 0;
+  const material = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(site.surface || '#7d735f'),
+    roughness: 1,
+    metalness: 0,
+    dithering: true,
+  });
+  horizon = new THREE.Mesh(new THREE.CircleGeometry(340, 72), material);
+  horizon.rotation.x = -Math.PI / 2;
+  horizon.position.y = groundY - 0.03;
+  horizon.receiveShadow = true;
+  scene.add(horizon);
 }
 
 // ------------------------------------------------------------------ framing
@@ -752,6 +796,7 @@ function animate(now = performance.now()) {
     orbit.update();
   }
 
+  updateDoors(delta);
   updateLighting(delta);
   sky.position.copy(camera.position);
   renderer.render(scene, camera);

@@ -20,7 +20,7 @@
   "site": {
     "width": 40,
     "depth": 56,
-    "surface": "ground",
+    "surface": "grass",
     "path": { "x": [3.5, 6.5], "from": -7, "to": 0 }
   },
 

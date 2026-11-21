@@ -77,6 +77,9 @@ PALETTE: dict[str, MaterialDef] = {
     "terracotta": MaterialDef("#B08A6A", roughness=0.85),
     # site
     "ground": MaterialDef("#7E8478", roughness=0.97),
+    "earth": MaterialDef("#8A7B62", roughness=0.99),
+    "grass": MaterialDef("#65704F", roughness=0.99),
+    "gravel": MaterialDef("#9A948A", roughness=0.98),
     "paving": MaterialDef("#A9A79E", roughness=0.95),
     "asphalt": MaterialDef("#4A4C4B", roughness=0.98),
 }

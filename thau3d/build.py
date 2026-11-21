@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .furniture import furnish
-from .geometry import MeshData, box, wedge
+from .geometry import MeshData, box, box_xyz, wedge
 from .glb import GLB
 from .materials import resolve_overrides
 from .spec import Building, Space, Stair, Storey, balcony_rect
@@ -348,11 +348,25 @@ class Builder:
         centre_y = self.b.depth / 2.0
         ground_y = -0.15
 
+        surface = str(site.get("surface") or "earth").lower()
+        surface_material = {
+            "earth": "earth",
+            "dirt": "earth",
+            "soil": "earth",
+            "grass": "grass",
+            "lawn": "grass",
+            "gravel": "gravel",
+            "paving": "paving",
+            "concrete": "concrete",
+            "ground": "earth",
+        }.get(surface, "earth")
+        self.site_color = self.palette[surface_material].color
+
         self.block(
             "site_ground",
             (centre_x, centre_y, ground_y - 0.3),
             (width, depth, 0.6),
-            "ground",
+            surface_material,
             "",
             support="ground",
         )
@@ -596,6 +610,27 @@ class Builder:
                     storey.id,
                 )
 
+                # a hinged leaf the viewer swings open as you approach
+                larger = first if first.area >= second.area else second
+                if kind == "h":
+                    hinge = (start + t0, line)
+                    along = (1.0, 0.0)
+                    swing = (0.0, -1.0) if larger.center[1] < line else (0.0, 1.0)
+                else:
+                    hinge = (line, start + t0)
+                    along = (0.0, 1.0)
+                    swing = (-1.0, 0.0) if larger.center[0] < line else (1.0, 0.0)
+                self.door_leaf(
+                    f"door_{first.id}_{second.id}",
+                    storey,
+                    hinge,
+                    along,
+                    swing,
+                    max(0.4, width - 0.05),
+                    height,
+                    storey.id,
+                )
+
     def _shared_edge(self, first: Space, second: Space):
         """Return ("h"|"v", line, start, end) for the boundary two rooms share."""
         if abs(first.y1 - second.y0) < 0.01:
@@ -753,6 +788,39 @@ class Builder:
                 "landing": {"rect": [stair.x0, landing_y0, stair.x1, landing_y1], "top": landing_top},
                 "top": base + rise_total,
             }
+        )
+    # ------------------------------------------------------------------ doors
+    def door_leaf(
+        self,
+        name: str,
+        storey: Storey,
+        hinge: tuple[float, float],
+        along: tuple[float, float],
+        swing: tuple[float, float],
+        width: float,
+        height: float,
+        storey_id: str,
+    ) -> None:
+        """A hinged door leaf, authored around its hinge so the viewer can swing it."""
+        if width < 0.4 or height < 1.0:
+            return
+        closed_yaw = math.atan2(along[1], along[0])
+        open_yaw = math.atan2(swing[1], swing[0])
+        mesh = box_xyz((width / 2.0, height / 2.0, 0.0), (width, height, 0.045))
+        self.glb.add_mesh(
+            self.name(name, storey_id),
+            mesh.positions,
+            mesh.normals,
+            mesh.indices,
+            self.mat("walnut"),
+            extras={
+                "storey": storey_id,
+                "door": True,
+                "closed": round(closed_yaw, 5),
+                "open": round(open_yaw, 5),
+            },
+            translation=(hinge[0], storey.base, -hinge[1]),
+            rotation_y=closed_yaw,
         )
     # ------------------------------------------------------------- balconies
     def build_balcony(self, balcony, storey: Storey) -> None:
@@ -1062,7 +1130,7 @@ class Builder:
             "supports": self.supports,
             "luminaires": self.luminaires,
             "spawn": spawn,
-            "site": getattr(self, "site_bounds", {}),
+            "site": {**getattr(self, "site_bounds", {}), "surface": getattr(self, "site_color", "#8A7B62")},
             "bounds": {
                 "min": [0.0, 0.0, -self.b.depth],
                 "max": [self.b.width, self.b.top + self.b.roof.get("parapet", 0.0), 0.0],
