@@ -1,0 +1,17 @@
+{
+  "name": "thau3d",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Describe a place. Get a building you can walk through.",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "setup": "node scripts/run.mjs setup",
+    "model": "node scripts/run.mjs model",
+    "dev": "node scripts/run.mjs dev",
+    "build": "node scripts/run.mjs build"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
