@@ -345,6 +345,7 @@ def _parse(raw: dict, path: Path | None) -> Building:
         "depth": float(site_raw.get("depth", depth / scale + 16.0)) * scale,
         "surface": str(site_raw.get("surface") or "ground"),
         "path": site_raw.get("path") or {},
+        "apron": float(site_raw.get("apron", 3.0)) * scale,
     }
 
     entrance_raw = dict(raw.get("entrance") or {})

@@ -375,6 +375,26 @@ class Builder:
             "max": [centre_x + width / 2.0, ground_y, -(centre_y - depth / 2.0)],
         }
 
+        # a concrete apron rings the building: hard edge, then grass beyond
+        apron = float(site.get("apron", 0.0))
+        if apron > 0:
+            top = ground_y + 0.03
+            thickness = 0.16
+            ring = [
+                ("front", (-apron, -apron, self.b.width + apron, 0.0)),
+                ("back", (-apron, self.b.depth, self.b.width + apron, self.b.depth + apron)),
+                ("left", (-apron, 0.0, 0.0, self.b.depth)),
+                ("right", (self.b.width, 0.0, self.b.width + apron, self.b.depth)),
+            ]
+            for label, (ax0, ay0, ax1, ay1) in ring:
+                self.block(
+                    self.name(f"apron_{label}", ""),
+                    ((ax0 + ax1) / 2.0, (ay0 + ay1) / 2.0, top - thickness / 2.0),
+                    (ax1 - ax0, ay1 - ay0, thickness),
+                    "concrete",
+                    "",
+                    support="concrete",
+                )
         path = site.get("path") or {}
         if path:
             x = path.get("x") or [self.b.width * 0.45, self.b.width * 0.55]
