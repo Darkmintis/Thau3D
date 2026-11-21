@@ -153,6 +153,24 @@
         }
       }
     },
+    "balconies": {
+      "type": "array",
+      "description": "Slabs projecting past an elevation, with a glazed balustrade and a door cut in the wall behind them.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["side", "span"],
+        "properties": {
+          "id": { "type": "string" },
+          "storey": { "type": "string" },
+          "side": { "enum": ["front", "back", "left", "right"] },
+          "span": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Start and end measured along that elevation." },
+          "depth": { "type": "number", "default": 4.5, "description": "How far the balcony projects." },
+          "railing": { "type": "number", "default": 3.4, "description": "Balustrade height." },
+          "door": { "type": "number", "default": 6.0, "description": "Width of the opening cut in the wall." }
+        }
+      }
+    },
     "doors": {
       "type": "array",
       "items": {

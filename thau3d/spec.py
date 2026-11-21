@@ -116,6 +116,35 @@ class DoorSpec:
 
 
 @dataclass
+class Balcony:
+    """A slab projecting past an elevation, with a glazed balustrade."""
+
+    id: str
+    storey: str
+    side: str
+    span: tuple[float, float]
+    depth: float
+    railing: float = 1.05
+    door: float = 1.9
+
+
+SIDES = ("front", "back", "left", "right")
+
+
+def balcony_rect(balcony: Balcony, building: "Building") -> tuple[float, float, float, float]:
+    """Plan rectangle (x0, y0, x1, y1) the balcony occupies."""
+    a0, a1 = balcony.span
+    depth = balcony.depth
+    if balcony.side == "front":
+        return (a0, -depth, a1, 0.0)
+    if balcony.side == "back":
+        return (a0, building.depth, a1, building.depth + depth)
+    if balcony.side == "left":
+        return (-depth, a0, 0.0, a1)
+    return (building.width, a0, building.width + depth, a1)
+
+
+@dataclass
 class Building:
     name: str
     units: str
@@ -125,6 +154,7 @@ class Building:
     stairs: list[Stair]
     windows: list[WindowSpec]
     doors: list[DoorSpec]
+    balconies: list[Balcony]
     entrance: dict
     roof: dict
     site: dict
@@ -287,6 +317,28 @@ def _parse(raw: dict, path: Path | None) -> Building:
             )
         )
 
+    balconies = []
+    for index, item in enumerate(raw.get("balconies", []) or []):
+        side = str(item.get("side") or "front").lower()
+        if side not in SIDES:
+            raise SpecError(f'balconies[{index}].side must be one of {SIDES}, got {side!r}')
+        span = item.get("span")
+        if not isinstance(span, (list, tuple)) or len(span) != 2:
+            raise SpecError(f'balconies[{index}] needs "span": [start, end] measured along the {side} elevation')
+        balconies.append(
+            Balcony(
+                id=str(item.get("id") or f"balcony{index + 1}"),
+                storey=str(item.get("storey") or storeys[0].id),
+                side=side,
+                span=(
+                    _number(_axis(span, 0), f"balconies[{index}].span[0]") * scale,
+                    _number(_axis(span, 1), f"balconies[{index}].span[1]") * scale,
+                ),
+                depth=float(item.get("depth", 4.5)) * scale,
+                railing=float(item.get("railing", 3.4)) * scale,
+                door=float(item.get("door", 6.0)) * scale,
+            )
+        )
     site_raw = dict(raw.get("site") or {})
     site = {
         "width": float(site_raw.get("width", width / scale + 14.0)) * scale,
@@ -308,6 +360,8 @@ def _parse(raw: dict, path: Path | None) -> Building:
         "type": str(roof_raw.get("type") or "terrace").lower(),
         "parapet": float(roof_raw.get("parapet", 3.0)) * scale,
         "overhang": float(roof_raw.get("overhang", 0.6)) * scale,
+        "pitch": float(roof_raw.get("pitch", 22.0)),
+        "ridge": str(roof_raw.get("ridge") or "x").lower(),
     }
 
     overrides = {str(k): str(v) for k, v in (raw.get("materials") or {}).items()}
@@ -321,6 +375,7 @@ def _parse(raw: dict, path: Path | None) -> Building:
         stairs=stairs,
         windows=windows,
         doors=doors,
+        balconies=balconies,
         entrance=entrance,
         roof=roof,
         site=site,
@@ -502,10 +557,67 @@ def validate(building: Building) -> list[Issue]:
                 Issue("error", window.space, "window head must sit above its sill")
             )
 
+    for balcony in building.balconies:
+        storey = building.storey(balcony.storey)
+        if storey is None:
+            issues.append(Issue("error", balcony.id, f'balcony refers to unknown storey "{balcony.storey}"'))
+            continue
+        if storey.index == 0:
+            issues.append(
+                Issue(
+                    "warning",
+                    balcony.id,
+                    "balcony sits on the ground storey; it will read as a terrace, not a projecting balcony",
+                )
+            )
+        span = balcony.span[1] - balcony.span[0]
+        side_length = building.width if balcony.side in ("front", "back") else building.depth
+        if balcony.span[0] < -eps or balcony.span[1] > side_length + eps:
+            issues.append(
+                Issue(
+                    "error",
+                    balcony.id,
+                    f'balcony span {_fmt(balcony.span[0], building.units)}..{_fmt(balcony.span[1], building.units)} '
+                    f"runs past the {balcony.side} elevation, which is only {_fmt(side_length, building.units)} long",
+                )
+            )
+        if span < balcony.door + 0.4:
+            issues.append(
+                Issue(
+                    "warning",
+                    balcony.id,
+                    f"balcony is {_fmt(span, building.units)} wide but its door needs {_fmt(balcony.door, building.units)}",
+                )
+            )
+        if balcony.depth <= 0.4:
+            issues.append(Issue("error", balcony.id, "balcony depth must be greater than 0.4 m"))
+        touching = any(
+            space.storey == balcony.storey and _touches_side(space, balcony, building)
+            for space in storey.spaces
+        )
+        if not touching:
+            issues.append(
+                Issue(
+                    "warning",
+                    balcony.id,
+                    f'no space on "{balcony.storey}" touches this part of the {balcony.side} elevation, '
+                    "so the balcony door will open from a wall with no room behind it",
+                )
+            )
+
     if building.entrance["width"] <= 0:
         issues.append(Issue("error", "entrance", "entrance width must be positive"))
 
     return issues
+
+
+def _touches_side(space: Space, balcony: Balcony, building: Building) -> bool:
+    eps = 0.02
+    if balcony.side in ("front", "back"):
+        on_side = space.y0 <= eps if balcony.side == "front" else space.y1 >= building.depth - eps
+        return on_side and space.x0 < balcony.span[1] and space.x1 > balcony.span[0]
+    on_side = space.x0 <= eps if balcony.side == "left" else space.x1 >= building.width - eps
+    return on_side and space.y0 < balcony.span[1] and space.y1 > balcony.span[0]
 
 
 def _side_length(space: Space, side: str, building: Building) -> float | None:

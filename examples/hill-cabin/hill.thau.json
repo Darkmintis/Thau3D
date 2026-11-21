@@ -1,0 +1,71 @@
+{
+  "version": "0.1",
+  "name": "Hill Cabin",
+  "units": "ft",
+
+  "footprint": { "width": 20, "depth": 26 },
+
+  "defaults": {
+    "storeyHeight": 10,
+    "clearHeight": 9.0,
+    "slab": 0.6,
+    "exteriorWall": 0.7,
+    "interiorWall": 0.375,
+    "doorWidth": 3.0,
+    "doorHeight": 7.0,
+    "windowSill": 2.6,
+    "windowHead": 7.4
+  },
+
+  "site": { "width": 34, "depth": 42, "path": { "x": [3, 6], "from": -8, "to": 0 } },
+
+  "entrance": { "space": "living", "side": "front", "width": 3.4, "height": 7.4 },
+
+  "materials": { "wall": "#E8E2D5", "materials_note": "warm off-white render" },
+
+  "storeys": [
+    {
+      "id": "ground",
+      "spaces": [
+        { "id": "living", "type": "living", "name": "Living", "x": [0, 12], "y": [0, 26] },
+        { "id": "kitchen", "type": "kitchen", "name": "Kitchen", "x": [12, 20], "y": [0, 12] },
+        { "id": "stair", "type": "stair", "name": "Stair", "x": [12, 20], "y": [12, 26] }
+      ]
+    },
+    {
+      "id": "first",
+      "spaces": [
+        { "id": "bedroom", "type": "bedroom", "name": "Bedroom", "x": [0, 12], "y": [0, 26] },
+        { "id": "bath", "type": "bath", "name": "Bath", "x": [12, 20], "y": [0, 10] },
+        { "id": "landing", "type": "hall", "name": "Landing", "x": [12, 20], "y": [10, 26] }
+      ]
+    }
+  ],
+
+  "stairs": [
+    {
+      "id": "main",
+      "storey": "ground",
+      "form": "straight",
+      "x": [13, 19],
+      "y": [12, 26],
+      "width": 4
+    }
+  ],
+
+  "windows": [
+    { "space": "living", "side": "front", "width": 8, "sill": 2.2, "head": 7.8 },
+    { "space": "living", "side": "left", "width": 6, "sill": 2.6, "head": 7.4 },
+    { "space": "kitchen", "side": "right", "width": 4, "sill": 3.4, "head": 7.2 },
+    { "space": "bedroom", "side": "front", "width": 7, "sill": 2.6, "head": 7.4 },
+    { "space": "bedroom", "side": "left", "width": 6, "sill": 2.6, "head": 7.4 },
+    { "space": "bath", "side": "right", "width": 3, "sill": 4.2, "head": 7.0 }
+  ],
+
+  "doors": [
+    { "between": ["living", "kitchen"], "width": 3.2 },
+    { "between": ["stair", "kitchen"], "width": 3.0 }
+  ],
+
+  "roof": { "type": "gable", "ridge": "y", "pitch": 30, "overhang": 1.5 }
+}

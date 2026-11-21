@@ -11,7 +11,7 @@
     "slab": 0.6,
     "exteriorWall": 0.75,
     "interiorWall": 0.4,
-    "doorWidth": 2.75,
+    "doorWidth": 3.0,
     "doorHeight": 7.0,
     "windowSill": 3.0,
     "windowHead": 7.2
@@ -69,9 +69,9 @@
   ],
 
   "stairs": [
-    { "id": "to_first", "storey": "ground", "x": [1, 9], "y": [26, 36], "width": 4 },
-    { "id": "to_second", "storey": "first", "x": [1, 9], "y": [26, 36], "width": 4 },
-    { "id": "to_roof", "storey": "second", "x": [1, 9], "y": [26, 36], "width": 4 }
+    { "id": "to_first", "storey": "ground", "x": [1, 9], "y": [24.5, 36], "width": 4 },
+    { "id": "to_second", "storey": "first", "x": [1, 9], "y": [24.5, 36], "width": 4 },
+    { "id": "to_roof", "storey": "second", "x": [1, 9], "y": [24.5, 36], "width": 4 }
   ],
 
   "windows": [
@@ -82,12 +82,12 @@
     { "space": "kitchen", "side": "right", "width": 8, "sill": 3.2, "head": 7.4 },
     { "space": "study", "side": "back", "width": 6, "sill": 3.2, "head": 7.2 },
     { "space": "bedroom_one", "side": "front", "width": 5, "sill": 3.0, "head": 7.2 },
-    { "space": "bedroom_two", "side": "front", "width": 9, "sill": 2.6, "head": 7.6 },
+    { "space": "bedroom_two", "side": "front", "width": 5, "sill": 3.0, "head": 7.2, "offset": -6 },
     { "space": "bath_one", "side": "left", "width": 2.5, "sill": 4.0, "head": 7.0 },
     { "space": "master", "side": "right", "width": 6, "sill": 3.0, "head": 7.4 },
     { "space": "lounge", "side": "back", "width": 7, "sill": 2.6, "head": 7.4 },
     { "space": "bedroom_three", "side": "front", "width": 5, "sill": 3.0, "head": 7.2 },
-    { "space": "family", "side": "front", "width": 8, "sill": 2.6, "head": 7.6 },
+    { "space": "family", "side": "front", "width": 5, "sill": 3.0, "head": 7.2, "offset": -6 },
     { "space": "bath_two", "side": "left", "width": 2.5, "sill": 4.0, "head": 7.0 },
     { "space": "bedroom_four", "side": "right", "width": 6, "sill": 3.0, "head": 7.4 },
     { "space": "study_two", "side": "back", "width": 6, "sill": 3.2, "head": 7.2 }
@@ -98,7 +98,12 @@
     { "between": ["entry", "dining"], "width": 2.8 },
     { "between": ["living", "kitchen"], "width": 3.0 },
     { "between": ["dining", "kitchen"], "width": 3.0 },
-    { "between": ["stair", "dining"], "width": 2.75 }
+    { "between": ["stair", "dining"], "width": 3.0 }
+  ],
+
+  "balconies": [
+    { "id": "first_balcony", "storey": "first", "side": "front", "span": [16, 25], "depth": 4.5, "railing": 3.4 },
+    { "id": "second_balcony", "storey": "second", "side": "front", "span": [16, 25], "depth": 4.5, "railing": 3.4 }
   ],
 
   "roof": { "type": "terrace", "parapet": 3.2 }

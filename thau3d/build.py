@@ -13,10 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .furniture import furnish
-from .geometry import MeshData, box
+from .geometry import MeshData, box, wedge
 from .glb import GLB
 from .materials import resolve_overrides
-from .spec import Building, Space, Stair, Storey
+from .spec import Building, Space, Stair, Storey, balcony_rect
 
 EYE_HEIGHT = 1.62
 EPS = 1e-4
@@ -71,6 +71,7 @@ class Builder:
         self.luminaires: list[dict] = []
         self.spaces_manifest: list[dict] = []
         self.stairs_manifest: list[dict] = []
+        self.balconies_manifest: list[dict] = []
         self.warnings: list[str] = []
         self._material_index: dict[str, int] = {}
         self._counters: dict[str, int] = {}
@@ -407,6 +408,33 @@ class Builder:
         defaults = self.b.defaults
         explicit: set[tuple[str, str]] = set()
 
+        # balcony doors: a framed opening where each projecting balcony meets the wall
+        for balcony in self.b.balconies:
+            if balcony.storey != storey.id:
+                continue
+            side = balcony.side
+            if side not in sides:
+                continue
+            span = balcony.span[1] - balcony.span[0]
+            width = min(balcony.door, span - 0.4)
+            if width <= 0.6:
+                self.warnings.append(
+                    f'balcony "{balcony.id}" is too narrow for a door and was skipped'
+                )
+                continue
+            centre = (balcony.span[0] + balcony.span[1]) / 2.0
+            head = min(2.35, storey.clear - 0.3)
+            result[side].append(
+                {
+                    "t0": centre - width / 2.0,
+                    "t1": centre + width / 2.0,
+                    "sill": 0.0,
+                    "head": head,
+                    "door": True,
+                    "frame": True,
+                }
+            )
+
         for window in self.b.windows:
             space = self.b.space(window.space, window.storey)
             if space is None or space.storey != storey.id:
@@ -482,13 +510,24 @@ class Builder:
             )
 
         for side, openings in result.items():
-            openings.sort(key=lambda item: item["t0"])
+            # doors win: a balcony or entrance opening is structural, a window can move
             clean: list[dict] = []
-            for opening in openings:
-                if clean and opening["t0"] < clean[-1]["t1"] - 1e-3:
+
+            def collides(candidate: dict) -> bool:
+                return any(
+                    candidate["t0"] < kept["t1"] - 1e-3 and candidate["t1"] > kept["t0"] + 1e-3
+                    for kept in clean
+                )
+
+            for opening in sorted([item for item in openings if item.get("door")], key=lambda item: item["t0"]):
+                if collides(opening):
                     self.warnings.append(
-                        f"two openings overlap on the {side} elevation of {storey.id}; kept the first"
+                        f"two doors compete for the same span on the {side} elevation of {storey.id}; kept one"
                     )
+                    continue
+                clean.append(opening)
+            for opening in sorted([item for item in openings if not item.get("door")], key=lambda item: item["t0"]):
+                if collides(opening):
                     continue
                 clean.append(opening)
             result[side] = clean
@@ -588,9 +627,52 @@ class Builder:
         for stair in self.b.stairs:
             self._build_stair(stair)
 
+    def _build_straight_stair(self, stair: Stair, storey: Storey) -> None:
+        """One straight flight from the front of the stair rectangle to the back."""
+        rise_total = storey.height
+        depth_total = stair.y1 - stair.y0
+        width = min(stair.width, (stair.x1 - stair.x0) - 0.1)
+        if depth_total < 1.0 or width < 0.7:
+            self.warnings.append(f'stair "{stair.id}" is too small to build and was skipped')
+            return
+        steps_count = max(6, int(math.ceil(rise_total / 0.19)))
+        tread = depth_total / steps_count
+        rise = rise_total / steps_count
+        if tread < 0.2:
+            self.warnings.append(
+                f'stair "{stair.id}" has {tread * 100:.0f} cm treads; it will walk badly'
+            )
+        centre_x = (stair.x0 + stair.x1) / 2.0
+        steps = []
+        for index in range(steps_count):
+            y0 = stair.y0 + index * tread
+            y1 = y0 + tread
+            top = storey.base + rise * (index + 1)
+            self.block(
+                self.name("stair_step", storey.id),
+                (centre_x, (y0 + y1) / 2.0, top - rise / 2.0),
+                (width, tread, rise),
+                "slab",
+                storey.id,
+                support="stair",
+            )
+            steps.append({"flight": "a", "rect": [stair.x0, y0, stair.x1, y1], "top": top})
+
+        self.stairs_manifest.append(
+            {
+                "id": stair.id,
+                "storey": storey.id,
+                "steps": steps,
+                "landing": None,
+                "top": storey.base + rise_total,
+            }
+        )
     def _build_stair(self, stair: Stair) -> None:
         storey = self.b.storey(stair.storey)
         if storey is None:
+            return
+        if stair.form == "straight":
+            self._build_straight_stair(stair, storey)
             return
         rise_total = storey.height
         depth_total = stair.y1 - stair.y0
@@ -672,6 +754,77 @@ class Builder:
                 "top": base + rise_total,
             }
         )
+    # ------------------------------------------------------------- balconies
+    def build_balcony(self, balcony, storey: Storey) -> None:
+        x0, y0, x1, y1 = balcony_rect(balcony, self.b)
+        thickness = 0.22
+        self.block(
+            self.name("balcony_slab", storey.id),
+            ((x0 + x1) / 2.0, (y0 + y1) / 2.0, storey.base - thickness / 2.0),
+            (x1 - x0, y1 - y0, thickness),
+            "slab",
+            storey.id,
+            support="balcony",
+        )
+        self.block(
+            self.name("balcony_soffit_band", storey.id),
+            ((x0 + x1) / 2.0, (y0 + y1) / 2.0, storey.base - thickness - 0.02),
+            (x1 - x0 + 0.04, y1 - y0 + 0.04, 0.06),
+            "stone",
+            storey.id,
+        )
+
+        rail = balcony.railing
+        edges = [
+            ("h", y0, x0, x1, "outer"),
+            ("h", y1, x0, x1, "wall_side"),
+            ("v", x0, y0, y1, "left"),
+            ("v", x1, y0, y1, "right"),
+        ]
+        skip = {"front": "wall_side", "back": "wall_side", "left": "right", "right": "left"}
+        for kind, fixed, start, end, label in edges:
+            if label == skip[balcony.side]:
+                continue
+            length = end - start
+            if length < 0.2:
+                continue
+            centre = (start + end) / 2.0
+            if kind == "h":
+                position = (centre, fixed)
+                glass_size = (length, 0.028, rail)
+                cap_size = (length + 0.04, 0.07, 0.05)
+            else:
+                position = (fixed, centre)
+                glass_size = (0.028, length, rail)
+                cap_size = (0.07, length + 0.04, 0.05)
+            self.block(
+                self.name("balustrade_glass", storey.id),
+                (position[0], position[1], storey.base + rail / 2.0),
+                glass_size,
+                "glass_clear",
+                storey.id,
+                collider="rail",
+            )
+            self.block(
+                self.name("balustrade_cap", storey.id),
+                (position[0], position[1], storey.base + rail + 0.025),
+                cap_size,
+                "metal",
+                storey.id,
+                collider="rail",
+            )
+
+        self.balconies_manifest.append(
+            {
+                "id": balcony.id,
+                "storey": storey.id,
+                "side": balcony.side,
+                "rect": [x0, y0, x1, y1],
+                "area": (x1 - x0) * (y1 - y0),
+                "railing": rail,
+            }
+        )
+
     # ------------------------------------------------------------------ roof
     def build_roof(self) -> None:
         last = self.b.storeys[-1]
@@ -679,13 +832,17 @@ class Builder:
         self.slab(last.id, thickness, last.top, None, "roof", "roof")
         self.build_edge_band(last, "slab", level=last.top)
 
-        parapet = self.b.roof.get("parapet", 0.9)
+        roof = self.b.roof
+        kind = roof.get("type", "terrace")
+        if kind in ("shed", "gable"):
+            self._build_pitched_roof(last, kind)
+            return
+
+        parapet = roof.get("parapet", 0.9)
         if parapet <= 0:
             return
         wall_thickness = self.b.defaults["exteriorWall"] * 0.7
         base = last.top
-        width = self.b.width
-        depth = self.b.depth
         for side, (start, end, _axis) in self._side_geometry().items():
             self.wall_run(
                 f"parapet_{side}",
@@ -712,6 +869,60 @@ class Builder:
             size = (length, thickness, height) if horizontal else (thickness, length, height)
             self.block(self.name("edge_band", storey.id), (centre[0], centre[1], z), size, material, storey.id)
 
+    def _build_pitched_roof(self, last: Storey, kind: str) -> None:
+        """Shed or gable roof sitting on the top slab, with an overhang at the eaves."""
+        roof = self.b.roof
+        overhang = max(0.0, roof.get("overhang", 0.6))
+        pitch = math.radians(max(3.0, min(70.0, roof.get("pitch", 22.0))))
+        x0, y0 = -overhang, -overhang
+        x1, y1 = self.b.width + overhang, self.b.depth + overhang
+        z_eave = last.top
+        fascia = 0.18
+
+        if kind == "shed":
+            rise = (y1 - y0) * math.tan(pitch)
+            self.emit(
+                self.name("roof_shed", last.id),
+                wedge(x0, x1, y0, y1, z_eave - fascia, z_eave, z_eave + rise, "y0"),
+                "roof",
+                last.id,
+            )
+            self.block(
+                self.name("roof_fascia", last.id),
+                ((x0 + x1) / 2.0, y1, z_eave - fascia / 2.0),
+                (x1 - x0, 0.06, fascia),
+                "frame",
+                last.id,
+            )
+            return
+
+        ridge = roof.get("ridge", "x")
+        if ridge == "y":
+            xm = (x0 + x1) / 2.0
+            rise = (xm - x0) * math.tan(pitch)
+            halves = (
+                wedge(x0, xm, y0, y1, z_eave - fascia, z_eave, z_eave + rise, "x1"),
+                wedge(xm, x1, y0, y1, z_eave - fascia, z_eave, z_eave + rise, "x0"),
+            )
+        else:
+            ym = (y0 + y1) / 2.0
+            rise = (ym - y0) * math.tan(pitch)
+            halves = (
+                wedge(x0, x1, y0, ym, z_eave - fascia, z_eave, z_eave + rise, "y1"),
+                wedge(x0, x1, ym, y1, z_eave - fascia, z_eave, z_eave + rise, "y0"),
+            )
+        for index, half in enumerate(halves):
+            self.emit(self.name(f"roof_gable_{index}", last.id), half, "roof", last.id)
+
+        # eaves fascia on the two long sides
+        for y_edge in (y0, y1):
+            self.block(
+                self.name("roof_fascia", last.id),
+                ((x0 + x1) / 2.0, y_edge, z_eave - fascia / 2.0),
+                (x1 - x0, 0.06, fascia),
+                "frame",
+                last.id,
+            )
     # ---------------------------------------------------------- floor finish
     def build_floor_finish(self, storey: Storey) -> None:
         finish_by_type = {
@@ -801,6 +1012,9 @@ class Builder:
             self.build_edge_band(storey, "stone" if storey.index == 0 else "slab")
             self.build_floor_finish(storey)
             self.build_exterior_walls(storey)
+            for balcony in self.b.balconies:
+                if balcony.storey == storey.id:
+                    self.build_balcony(balcony, storey)
             self.build_interior_walls(storey)
             self.build_furniture(storey)
             self.build_lights(storey)
@@ -843,6 +1057,7 @@ class Builder:
             "storeys": report.storeys,
             "spaces": self.spaces_manifest,
             "stairs": self.stairs_manifest,
+            "balconies": self.balconies_manifest,
             "colliders": self.colliders,
             "supports": self.supports,
             "luminaires": self.luminaires,
