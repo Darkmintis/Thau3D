@@ -133,8 +133,8 @@ const sun = new THREE.DirectionalLight(0xffe7c8, 2.6);
 sun.position.set(-12, 20, 14);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.bias = -0.00012;
-sun.shadow.normalBias = 0.045;
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.12;
 sun.shadow.camera.near = 1;
 sun.shadow.camera.far = 90;
 scene.add(sun);
@@ -278,7 +278,8 @@ async function loadModel() {
         }
         material.needsUpdate = true;
       }
-      object.castShadow = !material?.transparent;
+      // the site only receives: letting it cast makes its own top face self-shadow
+      object.castShadow = !material?.transparent && Boolean(object.userData.storey);
       object.receiveShadow = true;
     });
     scene.add(model);
