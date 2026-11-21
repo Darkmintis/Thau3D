@@ -78,6 +78,14 @@ Space `id`s only need to be unique within a storey, so `stair` can appear on all
 | `garage` | paved floor |
 | `stair`, `store` | nothing |
 
+### Site
+
+```json
+"site": { "width": 40, "depth": 56, "surface": "grass", "path": { "x": [3.5, 6.5], "from": -7, "to": 0 } }
+```
+
+`surface` picks the ground material: `earth`, `grass`, `gravel`, `paving` or `concrete`. The chosen colour is written into the manifest so the viewer's horizon plane matches the plot exactly, which is what stops a building floating in a void.
+
 ## How walls are derived
 
 **Exterior walls** run the full perimeter of the footprint, `defaults.exteriorWall` thick, centred on the boundary. Each elevation is split into solid segments around its openings.
@@ -91,7 +99,9 @@ Space `id`s only need to be unique within a storey, so `stair` can appear on all
 1. Explicit `windows` entries — full control over side, width, sill and head.
 2. Automatically: every habitable room (`living`, `bedroom`, `kitchen`, `dining`, `study`, `office`, `lounge`) that touches an exterior wall gets one, sized to about 60% of that wall and capped at 2.6 m.
 
-Each window becomes a pane plus a slim dark frame. The entrance becomes a framed opening with no leaf, so you can walk straight in.
+Each window becomes a pane plus a slim dark frame.
+
+**Doors are hinged leaves.** Every door between two spaces gets a real leaf, hinged at one jamb and swinging into the larger of the two rooms. The angles are baked into the node's `extras` as `closed` and `open`; the viewer swings the leaf as you approach. Leaves carry no collider, so they can never block a doorway. The entrance is left as a bare opening, and balcony doors are glazed openings.
 
 ## Balconies
 

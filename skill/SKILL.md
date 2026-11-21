@@ -51,6 +51,7 @@ That is the whole room contract. No walls, no doors — the builder puts a door 
 
 - **Balconies** project past the footprint: `"balconies": [{ "storey": "first", "side": "front", "span": [16, 25], "depth": 4.5 }]`. They cut their own door in the wall behind them.
 - **Roofs**: `terrace` (walkable, parapet), `flat`, `shed`, `gable` (with `pitch` and `ridge`).
+- **Site**: `"site": { "surface": "grass" | "earth" | "gravel" | "paving" }` sets the ground material. Interior doors are hinged and open automatically in the viewer — you do not need to model them.
 - **Stairs**: `"form": "u"` for a compact half-landing stair, `"form": "straight"` for a single long flight — the straight one needs about 4 m of run per storey.
 
 ### Room types you can use

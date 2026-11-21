@@ -85,6 +85,7 @@ built house.glb
 
 - **Exterior orbit** with day/night lighting and image-based reflections
 - **Projecting balconies** with glazed balustrades, pitched roofs and straight or U stairs, all driven by the spec
+- **Doors that open** as you walk towards them, and grounds chosen by material — earth, grass, gravel, paving — fading into a horizon
 - **Room list** built from the manifest — click a room to fly to it
 - **Storey isolation** to inspect one floor at a time
 - **First-person walk** with pointer lock or touch, AABB collision, gravity and real stair climbing
