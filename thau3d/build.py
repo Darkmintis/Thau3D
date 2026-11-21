@@ -369,7 +369,7 @@ class Builder:
             y1 = float(path.get("to", 0.0))
             self.block(
                 "site_path",
-                ((x0 + x1) / 2.0, (y0 + y1) / 2.0, ground_y - 0.06),
+                ((x0 + x1) / 2.0, (y0 + y1) / 2.0, ground_y - 0.035),
                 (x1 - x0, y1 - y0, 0.12),
                 "paving",
                 "",
