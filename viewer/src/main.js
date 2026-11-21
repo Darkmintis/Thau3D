@@ -169,7 +169,8 @@ orbit.screenSpacePanning = false;
 // re-locks or a device reports a spike.
 const LOOK_SENSITIVITY = 0.0022;
 const MAX_DELTA = 90;
-const look = { locked: false, yaw: 0, pitch: 0, targetYaw: 0, targetPitch: 0, dragging: false, fresh: false, x: 0, y: 0 };
+const look = { locked: false, yaw: 0, pitch: 0, targetYaw: 0, targetPitch: 0, dragging: false, fresh: false, lockedAt: 0, x: 0, y: 0 };
+const LOCK_GRACE_MS = 320;
 
 const keys = new Set();
 const touchMove = new Set();
@@ -206,6 +207,7 @@ document.addEventListener('pointerlockchange', () => {
   look.locked = document.pointerLockElement === renderer.domElement;
   if (look.locked) {
     look.fresh = true;
+    look.lockedAt = performance.now();
     els.resume.hidden = true;
     els.status.textContent = `${storeyLabelAt(camera.position.y)} · walking`;
     return;
@@ -217,8 +219,10 @@ document.addEventListener('pointerlockchange', () => {
 
 document.addEventListener('mousemove', (event) => {
   if (!look.locked || state.mode !== 'walk') return;
-  // The first event after a lock can carry a jump from wherever the cursor sat.
-  if (look.fresh) {
+  // Locking the pointer happens *because* the user clicked a button, and the
+  // opening events carry the jump from that click position. Ignore the first
+  // few hundred milliseconds rather than only the first event.
+  if (look.fresh || performance.now() - look.lockedAt < LOCK_GRACE_MS) {
     look.fresh = false;
     return;
   }
@@ -335,7 +339,6 @@ async function loadModel() {
 
     collectDoors(model);
     buildLights(manifest.luminaires || []);
-    addHorizon(manifest);
     frameBuilding(manifest);
     buildPanel(manifest);
     applyStoreyFilter(null);
@@ -395,24 +398,6 @@ function buildLights(entries) {
   });
 }
 
-// ------------------------------------------------------------- horizon ground
-let horizon = null;
-
-function addHorizon(manifest) {
-  const site = manifest.site || {};
-  const groundY = Array.isArray(site.max) ? site.max[1] : 0;
-  const material = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(site.surface || '#7d735f'),
-    roughness: 1,
-    metalness: 0,
-    dithering: true,
-  });
-  horizon = new THREE.Mesh(new THREE.CircleGeometry(340, 72), material);
-  horizon.rotation.x = -Math.PI / 2;
-  horizon.position.y = groundY - 0.03;
-  horizon.receiveShadow = true;
-  scene.add(horizon);
-}
 
 // ------------------------------------------------------------------ framing
 function frameBuilding(manifest) {
@@ -453,30 +438,13 @@ function frameBuilding(manifest) {
 function buildPanel(manifest) {
   els.spaceList.innerHTML = '';
   for (const storey of manifest.storeys) {
-    const row = document.createElement('div');
-    row.className = 'storey-row';
-
-    const title = document.createElement('button');
-    title.type = 'button';
-    title.className = 'storey-title';
-    title.dataset.storey = storey.id;
-    title.innerHTML = `<span>${storey.id.toUpperCase()}</span><span>${storey.area_net.toFixed(1)} m²</span>`;
-    title.addEventListener('click', () => {
-      const next = state.isolatedStorey === storey.id ? null : storey.id;
-      setStorey(next);
-    });
-    row.appendChild(title);
-
-    for (const space of manifest.spaces.filter((item) => item.storey === storey.id)) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'space-button';
-      button.dataset.space = space.id;
-      button.innerHTML = `<span>${space.name}</span><small>${space.area.toFixed(1)} m²</small>`;
-      button.addEventListener('click', () => focusSpace(space));
-      row.appendChild(button);
-    }
-    els.spaceList.appendChild(row);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'storey-title';
+    button.dataset.storey = storey.id;
+    button.innerHTML = `<span>${storey.id.toUpperCase()}</span><span>${storey.area_net.toFixed(1)} m²</span>`;
+    button.addEventListener('click', () => setStorey(state.isolatedStorey === storey.id ? null : storey.id));
+    els.spaceList.appendChild(button);
   }
 }
 
