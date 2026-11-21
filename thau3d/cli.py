@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .build import Builder
 from .spec import FT, SpecInvalid, SpecError, load_spec, validate
+from .verify import verify
 
 
 def _fmt(value: float, units: str, area: bool = False) -> str:
@@ -115,6 +116,42 @@ def cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    try:
+        building = load_spec(args.spec)
+    except SpecInvalid as error:
+        print(f"{args.spec}: {len(error.errors)} problem(s); fix validation before verifying\n", file=sys.stderr)
+        for issue in error.issues:
+            print(f"  {issue}", file=sys.stderr)
+        return 1
+    except SpecError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    checks = verify(building)
+    failures = [check for check in checks if check.level == "fail"]
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "ok": not failures,
+                    "checks": [{"level": c.level, "name": c.name, "detail": c.detail} for c in checks],
+                }
+            )
+        )
+        return 0 if not failures else 1
+
+    marks = {"pass": "  ok  ", "warn": " warn ", "fail": " FAIL "}
+    print(f"{building.name}")
+    print(f"{'':8}{'check':<22} detail")
+    for check in checks:
+        print(f"[{marks[check.level]}] {check.name:<22} {check.detail}")
+    passed = sum(1 for check in checks if check.level == "pass")
+    warned = sum(1 for check in checks if check.level == "warn")
+    print(f"\n{passed} passed · {warned} warnings · {len(failures)} failures")
+    return 0 if not failures else 1
+
 def cmd_report(args: argparse.Namespace) -> int:
     try:
         building = load_spec(args.spec)
@@ -187,6 +224,11 @@ def build_parser() -> argparse.ArgumentParser:
     build_parser_cmd.add_argument("--stem", default=None)
     build_parser_cmd.add_argument("--json", action="store_true")
     build_parser_cmd.set_defaults(func=cmd_build)
+
+    verify_parser = sub.add_parser("verify", help="check dimensions: heights, doors, room sizes, stairs, daylight")
+    verify_parser.add_argument("spec")
+    verify_parser.add_argument("--json", action="store_true")
+    verify_parser.set_defaults(func=cmd_verify)
 
     report_parser = sub.add_parser("report", help="print the room schedule")
     report_parser.add_argument("spec")

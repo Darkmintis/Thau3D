@@ -5,6 +5,7 @@ from __future__ import annotations
 __version__ = "0.1.0"
 
 from .build import Builder, BuildReport, build_file
+from .verify import Check, verify  # noqa: F401
 from .spec import (  # noqa: F401  (re-exported for convenience)
     Building,
     Issue,
@@ -22,5 +23,7 @@ __all__ = [
     "build_file",
     "load_spec",
     "validate",
+    "verify",
+    "Check",
     "__version__",
 ]
