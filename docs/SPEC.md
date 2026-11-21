@@ -93,6 +93,19 @@ Space `id`s only need to be unique within a storey, so `stair` can appear on all
 
 Each window becomes a pane plus a slim dark frame. The entrance becomes a framed opening with no leaf, so you can walk straight in.
 
+## Balconies
+
+A balcony is not a room: it projects *past* the footprint, so it gets its own array.
+
+```json
+{ "id": "first_balcony", "storey": "first", "side": "front", "span": [16, 25], "depth": 4.5, "railing": 3.4 }
+```
+
+- `span` is measured along that elevation: `x` for front/back, `y` for left/right.
+- `depth` is how far it projects; `railing` is the balustrade height.
+- The builder adds a slab with a shadow-gap soffit band, a glazed balustrade with a metal cap on the three open sides, and cuts a framed door in the wall behind it.
+- A balcony door always wins over a window that competes for the same span, because it is structural and the window can move.
+
 ## Stairs
 
 ```json
@@ -102,6 +115,7 @@ Each window becomes a pane plus a slim dark frame. The entrance becomes a framed
 - `storey` is where the flight **starts**. It climbs to the next storey up.
 - The rectangle must sit inside a space on that storey.
 - `form: "u"` builds two flights around a half-landing; the return flight lands beside the first.
+- `form: "straight"` builds one flight climbing the full storey across the rectangle's depth. It needs roughly 4 m of run for a 3 m storey at a walkable pitch, so give it a long rectangle.
 - Riser height is derived: `storeyHeight / 2 / ceil((storeyHeight / 2) / 0.19)`, so it never exceeds 19 cm.
 - The storey above gets a stairwell hole cut in its slab automatically, and the roof gets one if a stair starts on the top storey.
 
@@ -141,6 +155,10 @@ The manifest is what makes the model a *place* rather than a mesh:
 ```
 
 A viewer needs nothing else: colliders to block movement, supports to stand on, stairs to climb.
+
+## Checking the result
+
+`validate` is about coherence. `thau3d verify` is about usability: ceiling heights, door widths, room minimums, stair riser and tread, daylight ratios, footprint coverage and balustrade heights. It exits non-zero if anything fails, so it belongs in the loop right after `validate`.
 
 ## Limits in 0.1
 

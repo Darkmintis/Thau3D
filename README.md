@@ -84,6 +84,7 @@ built house.glb
 `viewer/` is a Vite + Three.js app. It reads the GLB and the manifest and gives you:
 
 - **Exterior orbit** with day/night lighting and image-based reflections
+- **Projecting balconies** with glazed balustrades, pitched roofs and straight or U stairs, all driven by the spec
 - **Room list** built from the manifest — click a room to fly to it
 - **Storey isolation** to inspect one floor at a time
 - **First-person walk** with pointer lock or touch, AABB collision, gravity and real stair climbing
@@ -114,7 +115,7 @@ Specs are written in **plan space**: `x` runs across the facade, `y` runs away f
 
 ## Status
 
-`0.1` — the spec, builder, manifest and viewer are working end to end. Known gaps: rectilinear plans only, one stair form, no balcony volumes, and a deliberately small furniture vocabulary. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
+`0.2` — the spec, builder, manifest, viewer and verification layer work end to end: projecting balconies, pitched roofs, two stair forms, glazed window and balustrade systems. Known gaps: rectilinear plans only, no dormers, and a deliberately small furniture vocabulary. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## License
 
