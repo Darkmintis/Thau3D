@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from .spec import Building, Storey, balcony_rect
+from .spec import Building, Storey, balcony_rect, stair_flight
 
 # thresholds, metres unless noted
 MIN_CLEAR_HEIGHT = 2.30
@@ -131,17 +131,11 @@ def verify(building: Building) -> list[Check]:
             storey: Storey | None = building.storey(stair.storey)
             if storey is None:
                 continue
-            if stair.form == "straight":
-                count = max(6, int(math.ceil(storey.height / MAX_RISER)))
-                tread = (stair.y1 - stair.y0) / count
-                riser = storey.height / count
-            else:
-                count = max(6, int(math.ceil((storey.height / 2.0) / MAX_RISER)))
-                landing = min(max(1.0, stair.width), (stair.y1 - stair.y0) * 0.4)
-                run = (stair.y1 - stair.y0) - landing
-                tread = run / count
-                riser = storey.height / (2.0 * count)
-            width = min(stair.width, (stair.x1 - stair.x0) / (2.0 if stair.form != "straight" else 1.0) - 0.05)
+            flight = stair_flight(stair, storey)
+            count = flight["count"]
+            tread = flight["tread"]
+            riser = flight["riser"]
+            width = flight["width"]
 
             if riser > MAX_RISER:
                 checks.append(Check("fail", f"stair {stair.id}", f"riser {_m(riser)} exceeds {_m(MAX_RISER)}"))

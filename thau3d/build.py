@@ -16,7 +16,7 @@ from .furniture import furnish
 from .geometry import MeshData, box, box_xyz, wedge
 from .glb import GLB
 from .materials import resolve_overrides
-from .spec import Building, Space, Stair, Storey, balcony_rect
+from .spec import Building, Space, Stair, Storey, balcony_rect, stair_flight
 
 EYE_HEIGHT = 1.62
 EPS = 1e-4
@@ -57,6 +57,18 @@ def _bounds(positions: list[tuple[float, float, float]]) -> tuple[list[float], l
     return ([min(xs), min(ys), min(zs)], [max(xs), max(ys), max(zs)])
 
 
+def _rects_overlap(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+    margin: float = 0.02,
+) -> bool:
+    return (
+        a[0] < b[2] - margin
+        and a[2] > b[0] + margin
+        and a[1] < b[3] - margin
+        and a[3] > b[1] + margin
+    )
+
 def _overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     return min(a1, b1) - max(a0, b0)
 
@@ -72,6 +84,8 @@ class Builder:
         self.spaces_manifest: list[dict] = []
         self.stairs_manifest: list[dict] = []
         self.balconies_manifest: list[dict] = []
+        self.door_clearance: dict[str, list[tuple[float, float, float, float]]] = {}
+        self.furniture_zones: dict[str, list[tuple[float, float, float, float]]] = {}
         self.warnings: list[str] = []
         self._material_index: dict[str, int] = {}
         self._counters: dict[str, int] = {}
@@ -403,7 +417,7 @@ class Builder:
             y1 = float(path.get("to", 0.0))
             self.block(
                 "site_path",
-                ((x0 + x1) / 2.0, (y0 + y1) / 2.0, ground_y - 0.035),
+                ((x0 + x1) / 2.0, (y0 + y1) / 2.0, ground_y - 0.025),
                 (x1 - x0, y1 - y0, 0.12),
                 "paving",
                 "",
@@ -606,10 +620,13 @@ class Builder:
                 width = min(door.width if door else door_default, max(0.5, span - 0.3))
                 height = door.height if door else door_height
                 offset = door.offset if door else 0.0
-                centre = min(
-                    max((start + end) / 2.0 + offset, start + width / 2.0 + 0.15),
-                    end - width / 2.0 - 0.15,
-                )
+                centre = self._door_centre(first, second, kind, line, start, end, width, offset)
+                if centre is None:
+                    self.warnings.append(
+                        f"{first.id}/{second.id}: no clear stretch of wall for a door; "
+                        "furniture is in the way on both sides"
+                    )
+                    continue
                 t0 = centre - width / 2.0 - start
                 t1 = t0 + width
 
@@ -629,6 +646,24 @@ class Builder:
                     "wall_inner",
                     storey.id,
                 )
+
+                # reserve the swing zone in front of the door so furniture
+                # never blocks the way through
+                clear = 0.95
+                if kind == "h":
+                    zone_x0, zone_x1 = a[0] + t0, a[0] + t1
+                    for space in (first, second):
+                        if space.y1 <= line + 1e-4:
+                            self.door_clearance.setdefault(space.id, []).append((zone_x0, line - clear, zone_x1, line))
+                        else:
+                            self.door_clearance.setdefault(space.id, []).append((zone_x0, line, zone_x1, line + clear))
+                else:
+                    zone_y0, zone_y1 = a[1] + t0, a[1] + t1
+                    for space in (first, second):
+                        if space.x1 <= line + 1e-4:
+                            self.door_clearance.setdefault(space.id, []).append((line - clear, zone_y0, line, zone_y1))
+                        else:
+                            self.door_clearance.setdefault(space.id, []).append((line, zone_y0, line + clear, zone_y1))
 
                 # a hinged leaf the viewer swings open as you approach
                 larger = first if first.area >= second.area else second
@@ -671,6 +706,57 @@ class Builder:
                 return ("v", second.x1, max(first.y0, second.y0), min(first.y1, second.y1))
         return None
 
+    def _door_centre(
+        self,
+        first: Space,
+        second: Space,
+        kind: str,
+        line: float,
+        start: float,
+        end: float,
+        width: float,
+        offset: float,
+    ) -> float | None:
+        """Slide a door along its shared wall until it clears the furniture."""
+        lo = start + width / 2.0 + 0.08
+        hi = end - width / 2.0 - 0.08
+        if hi < lo:
+            return None
+
+        margin = 0.14
+        blocked: list[tuple[float, float]] = []
+        for space in (first, second):
+            for rect in self.furniture_zones.get(space.id, []):
+                if kind == "h":
+                    near = min(abs(rect[1] - line), abs(rect[3] - line)) < 1.4
+                    a0, a1 = rect[0], rect[2]
+                else:
+                    near = min(abs(rect[0] - line), abs(rect[2] - line)) < 1.4
+                    a0, a1 = rect[1], rect[3]
+                if near:
+                    blocked.append((a0 - margin, a1 + margin))
+
+        preferred = (start + end) / 2.0 + offset
+        candidates = [preferred]
+        step = 0.12
+        position = lo
+        while position <= hi:
+            candidates.append(position)
+            position += step
+
+        best: float | None = None
+        best_cost = float("inf")
+        for candidate in candidates:
+            centre = min(max(candidate, lo), hi)
+            z0, z1 = centre - width / 2.0, centre + width / 2.0
+            overlap = sum(max(0.0, min(z1, b1) - max(z0, b0)) for b0, b1 in blocked)
+            cost = overlap * 10.0 + abs(centre - preferred) * 0.05
+            if overlap <= 1e-6:
+                return centre
+            if cost < best_cost:
+                best_cost = cost
+                best = centre
+        return best
     def _door_for(self, a: str, b: str):
         for door in self.b.doors:
             if set(door.between) == {a, b}:
@@ -1044,7 +1130,14 @@ class Builder:
     def build_furniture(self, storey: Storey) -> None:
         for space in storey.spaces:
             pieces = furnish(space, storey.base + 0.02, storey.clear)
+            zones = self.door_clearance.get(space.id, [])
+            dropped = 0
             for piece in pieces:
+                if piece.blocks and zones:
+                    plan = self._plan_bounds(piece.mesh)
+                    if any(_rects_overlap(plan, zone) for zone in zones):
+                        dropped += 1
+                        continue
                 self.emit(
                     self.name(piece.material, storey.id),
                     piece.mesh,
@@ -1053,6 +1146,16 @@ class Builder:
                     collider="furniture" if piece.blocks else None,
                     extras={"space": space.id},
                 )
+            if dropped:
+                self.warnings.append(
+                    f"{space.id}: moved {dropped} furniture piece(s) clear of a doorway"
+                )
+
+    @staticmethod
+    def _plan_bounds(mesh: MeshData) -> tuple[float, float, float, float]:
+        xs = [point[0] for point in mesh.positions]
+        zs = [point[2] for point in mesh.positions]
+        return (min(xs), -max(zs), max(xs), -min(zs))
 
     # ----------------------------------------------------------------- lights
     def build_lights(self, storey: Storey) -> None:
@@ -1099,12 +1202,13 @@ class Builder:
                 self.slab(storey.id, slab, storey.base, hole, "slab", "floor")
             self.build_edge_band(storey, "stone" if storey.index == 0 else "slab")
             self.build_floor_finish(storey)
+            # furniture first: doors then place themselves around it, not through it
+            self.build_furniture(storey)
             self.build_exterior_walls(storey)
             for balcony in self.b.balconies:
                 if balcony.storey == storey.id:
                     self.build_balcony(balcony, storey)
             self.build_interior_walls(storey)
-            self.build_furniture(storey)
             self.build_lights(storey)
             self.spaces_manifest.extend(
                 {

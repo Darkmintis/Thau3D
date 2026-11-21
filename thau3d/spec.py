@@ -9,6 +9,7 @@ and for a language model to write correctly.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -130,6 +131,34 @@ class Balcony:
 
 SIDES = ("front", "back", "left", "right")
 
+
+def stair_flight(stair: "Stair", storey: "Storey") -> dict:
+    """The single definition of a stair's geometry, shared by builder and verify.
+
+    Keeping this in one place is why the builder and the checks cannot disagree
+    about riser height or tread depth.
+    """
+    depth = stair.y1 - stair.y0
+    if stair.form == "straight":
+        width = min(stair.width, (stair.x1 - stair.x0) - 0.1)
+        count = max(6, int(math.ceil(storey.height / 0.19)))
+        landing = 0.0
+        tread = depth / count
+        riser = storey.height / count
+    else:
+        width = max(0.85, min(stair.width, (stair.x1 - stair.x0) / 2.0 - 0.05))
+        count = max(6, int(math.ceil((storey.height / 2.0) / 0.19)))
+        landing = min(max(1.0, width), depth * 0.4)
+        tread = (depth - landing) / count
+        riser = storey.height / (2.0 * count)
+    return {
+        "count": count,
+        "riser": riser,
+        "tread": tread,
+        "width": width,
+        "landing": landing,
+        "depth": depth,
+    }
 
 def balcony_rect(balcony: Balcony, building: "Building") -> tuple[float, float, float, float]:
     """Plan rectangle (x0, y0, x1, y1) the balcony occupies."""
@@ -340,11 +369,22 @@ def _parse(raw: dict, path: Path | None) -> Building:
             )
         )
     site_raw = dict(raw.get("site") or {})
+
+    path_raw = site_raw.get("path") or {}
+    path: dict = {}
+    if path_raw:
+        span = path_raw.get("x") or [width / scale * 0.45, width / scale * 0.55]
+        path = {
+            "x": [float(span[0]) * scale, float(span[1]) * scale],
+            "from": float(path_raw.get("from", -6.0)) * scale,
+            "to": float(path_raw.get("to", 0.0)) * scale,
+        }
+
     site = {
         "width": float(site_raw.get("width", width / scale + 14.0)) * scale,
         "depth": float(site_raw.get("depth", depth / scale + 16.0)) * scale,
         "surface": str(site_raw.get("surface") or "ground"),
-        "path": site_raw.get("path") or {},
+        "path": path,
         "apron": float(site_raw.get("apron", 3.0)) * scale,
     }
 
