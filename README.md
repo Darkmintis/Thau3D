@@ -98,7 +98,9 @@ built house.glb
 
 - **Exterior orbit** with day/night lighting and image-based reflections
 - **Projecting balconies** with glazed balustrades, pitched roofs and straight or U stairs, all driven by the spec
-- **Doors that open** as you walk towards them, and grounds chosen by material — earth, grass, gravel, paving — fading into a horizon
+- **Doors that open** as you walk towards them, on a plan whose doors are derived from circulation rather than every shared wall
+- **Grounds chosen by material** — earth, grass, gravel, paving — on a bounded plot with a compound wall, not an infinite plane
+- **Furniture that knows the room**: placed by a solver that avoids doorways, windows and other furniture, so a sofa faces the television and a bed never blocks a door
 - **Empty-house toggle** (or the F key) strips every piece of furniture so you can check the bare plan, doors and all
 - **Room list** built from the manifest — click a room to fly to it
 - **Storey isolation** to inspect one floor at a time

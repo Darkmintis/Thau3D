@@ -103,6 +103,20 @@ Space `id`s only need to be unique within a storey, so `stair` can appear on all
 
 Each window becomes a pane plus a slim dark frame.
 
+### Circulation rules
+
+The builder derives a plan's circulation rather than trusting every shared wall:
+
+- a door is placed only where one is needed — private rooms (bedroom, bath, study) get **one** door, onto the hall, landing or entry they touch
+- two private rooms share a **solid wall**; kitchen/bath and dining/bath are refused outright
+- rooms that both belong to daytime circulation (entry, hall, living, dining, kitchen) get a **wide open passage** with no leaf
+- a stair is entered through one framed portal on its hall side, never through a swinging door onto the steps
+- the entrance carries an optional `offset` so it can line up with the hall beyond it
+
+### Stairs
+
+A stair rectangle is clamped to the stairwell it stands in. Without that, the strip between the flights and the wall is a hole to fall down — the viewer walks it, so the geometry has to be closed. A solid spine wall fills the well between the two flights.
+
 **Doors are hinged leaves.** Every door between two spaces gets a real leaf, hinged at one jamb and swinging into the larger of the two rooms. The angles are baked into the node's `extras` as `closed` and `open`; the viewer swings the leaf as you approach. Leaves carry no collider, so they can never block a doorway. The entrance is left as a bare opening, and balcony doors are glazed openings.
 
 ## Balconies
