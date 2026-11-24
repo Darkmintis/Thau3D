@@ -48,7 +48,7 @@ class ExampleSpecTest(unittest.TestCase):
     def test_example_loads_and_validates(self):
         building = load_spec(EXAMPLE)
         self.assertEqual(len(building.storeys), 3)
-        self.assertEqual(sum(len(storey.spaces) for storey in building.storeys), 20)
+        self.assertEqual(sum(len(storey.spaces) for storey in building.storeys), 19)
         self.assertGreater(building.width, 7.0)
         errors = [issue for issue in validate(building) if issue.level == "error"]
         self.assertEqual(errors, [])

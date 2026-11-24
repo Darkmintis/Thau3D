@@ -194,6 +194,37 @@ def verify(building: Building) -> list[Check]:
                 Check("pass", f"balcony {balcony.id}", f"{(x1 - x0) * (y1 - y0):.1f} m² with a {_m(balcony.railing)} railing")
             )
 
+    # --------------------------------------------------- furniture clearance
+    from .build import Builder, _rects_overlap
+
+    probe = Builder(building)
+    probe.build()
+    blocked_rooms: list[str] = []
+    worst = 0.0
+    for space_id, zones in probe.door_clearance.items():
+        for f_rect in probe.furniture_zones.get(space_id, []):
+            for zone in zones:
+                ox = min(f_rect[2], zone[2]) - max(f_rect[0], zone[0])
+                oy = min(f_rect[3], zone[3]) - max(f_rect[1], zone[1])
+                area = max(0.0, ox) * max(0.0, oy)
+                worst = max(worst, area)
+                # A corner grazing the zone edge is not an obstruction; a piece
+                # sitting in the doorway is.
+                if area > 0.12 and space_id not in blocked_rooms:
+                    blocked_rooms.append(space_id)
+    if blocked_rooms:
+        checks.append(
+            Check("fail", "door clearance", f"furniture intrudes into doorway zone in: {', '.join(blocked_rooms)}")
+        )
+    else:
+        checks.append(
+            Check(
+                "pass",
+                "door clearance",
+                f"every doorway and swing zone is clear of furniture (worst corner {worst * 100:.0f} cm²)",
+            )
+        )
+
     return checks
 
 

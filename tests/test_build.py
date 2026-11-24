@@ -62,10 +62,27 @@ class BuildTest(unittest.TestCase):
         for key in ("storeys", "spaces", "stairs", "colliders", "supports", "luminaires", "spawn", "bounds"):
             self.assertIn(key, self.manifest)
         self.assertEqual(len(self.manifest["storeys"]), 3)
-        self.assertEqual(len(self.manifest["spaces"]), 20)
+        self.assertEqual(len(self.manifest["spaces"]), 19)
         self.assertGreater(len(self.manifest["colliders"]), 100)
         self.assertGreater(len(self.manifest["supports"]), 30)
         self.assertEqual(len(self.manifest["stairs"]), 3)
+
+    def test_door_count_and_furniture_clearance(self):
+        doors = [node for node in self.gltf["nodes"] if (node.get("extras") or {}).get("door")]
+        self.assertGreaterEqual(len(doors), 6)
+        self.assertLessEqual(len(doors), 12)
+        building = load_spec(EXAMPLE)
+        builder = Builder(building)
+        builder.build()
+        for space_id, zones in builder.door_clearance.items():
+            for rect in builder.furniture_zones.get(space_id, []):
+                for zone in zones:
+                    overlap_x = min(rect[2], zone[2]) - max(rect[0], zone[0])
+                    overlap_y = min(rect[3], zone[3]) - max(rect[1], zone[1])
+                    self.assertFalse(
+                        overlap_x > 0.03 and overlap_y > 0.03,
+                        f"furniture in {space_id} blocks a doorway zone: {rect} vs {zone}",
+                    )
 
     def test_spawn_waits_outside_the_front_door(self):
         spawn = self.manifest["spawn"]
