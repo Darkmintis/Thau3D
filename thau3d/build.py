@@ -20,16 +20,20 @@ from .spec import Building, Space, Stair, Storey, balcony_rect, stair_flight
 
 EYE_HEIGHT = 1.62
 
-# rooms that connect the plan; a wall between two private rooms stays solid
+# Room role categories used when deriving interior doors and open passages.
+HALL_TYPES = {"hall", "landing", "entry"}
+OPEN_DAY_TYPES = {"hall", "landing", "entry", "living", "lounge", "dining", "kitchen"}
+PRIVATE_TYPES = {"bedroom", "bath", "wc", "study", "office", "utility", "store"}
 CIRCULATION_TYPES = {"hall", "landing", "entry", "stair", "living", "lounge", "dining", "kitchen", "office"}
 
-# a door between these would be a design mistake, whatever the adjacency says
+# A door between these pairs is always refused unless explicitly forced.
 NO_DOOR_PAIRS = {
     ("kitchen", "bath"),
     ("kitchen", "wc"),
     ("dining", "bath"),
     ("dining", "wc"),
     ("living", "bath"),
+    ("living", "wc"),
 }
 EPS = 1e-4
 
@@ -81,6 +85,7 @@ def _rects_overlap(
         and a[3] > b[1] + margin
     )
 
+
 def _overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     return min(a1, b1) - max(a0, b0)
 
@@ -99,6 +104,8 @@ class Builder:
         self.door_clearance: dict[str, list[tuple[float, float, float, float]]] = {}
         self.furniture_zones: dict[str, list[tuple[float, float, float, float]]] = {}
         self.space_windows: dict[str, set[str]] = {}
+        self.space_windows_by_side: dict[str, dict[str, list[tuple[float, float]]]] = {}
+        self.space_doors_by_side: dict[str, dict[str, list[tuple[float, float]]]] = {}
         self._openings_cache: dict[str, dict[str, list[dict]]] = {}
         self.warnings: list[str] = []
         self._material_index: dict[str, int] = {}
@@ -215,6 +222,17 @@ class Builder:
                 yaw=yaw,
                 collider="wall",
             )
+            # Skirting: a 10 cm band at the foot of every wall segment that meets
+            # the floor. It is the shadow line that makes a room look finished.
+            if z0 <= 1e-6 and material in ("wall", "wall_inner") and span > 0.25:
+                self.block(
+                    self.name(f"{name}_skirt", storey_id),
+                    (cx, cy, base_z + 0.05),
+                    (span, thickness + 0.02, 0.10),
+                    "skirting",
+                    storey_id,
+                    yaw=yaw,
+                )
 
         ordered = sorted(openings, key=lambda item: item["t0"])
         cursor = 0.0
@@ -316,10 +334,10 @@ class Builder:
         thickness: float,
         storey_id: str,
     ) -> None:
-        """A door opening: dark reveal only, no leaf, so you can walk through it."""
-        bar = 0.08
+        """A door or archway frame: crisp dark jambs and head reveal."""
+        bar = 0.055
         centre = (t0 + t1) / 2.0
-        inner = thickness * 0.45
+        inner = thickness + 0.02
         for index, t in enumerate((t0 + bar / 2.0, t1 - bar / 2.0)):
             self._insert(
                 a, direction, t, bar, inner,
@@ -403,7 +421,7 @@ class Builder:
             "max": [centre_x + width / 2.0, ground_y, -(centre_y - depth / 2.0)],
         }
 
-        # a concrete apron rings the building: hard edge, then grass beyond
+        # A concrete apron rings the building: hard edge, then grass beyond.
         apron = float(site.get("apron", 0.0))
         if apron > 0:
             top = ground_y + 0.03
@@ -423,6 +441,7 @@ class Builder:
                     "",
                     support="concrete",
                 )
+
         border = float(site.get("border", 1.0))
         if border > 0:
             span_x = width / 2.0
@@ -437,9 +456,20 @@ class Builder:
                 ((edge_x1, edge_y0), (edge_x1, edge_y1)),
             ]
             if gate:
-                gap0, gap1 = float(gate[0]) - 0.6, float(gate[1]) + 0.6
+                gap0 = max(edge_x0 + 0.4, float(gate[0]) - 0.35)
+                gap1 = min(edge_x1 - 0.4, float(gate[1]) + 0.35)
                 runs.append(((edge_x0, edge_y0), (gap0, edge_y0)))
                 runs.append(((gap1, edge_y0), (edge_x1, edge_y0)))
+                # Stone gate piers on either side of the entrance walk
+                for pier_index, pier_x in enumerate((gap0, gap1)):
+                    self.block(
+                        f"site_gate_pier_{pier_index}",
+                        (pier_x, edge_y0, ground_y + (border + 0.18) / 2.0),
+                        (0.32, 0.32, border + 0.18),
+                        "stone",
+                        "",
+                        collider="wall",
+                    )
             else:
                 runs.append(((edge_x0, edge_y0), (edge_x1, edge_y0)))
             for index, (start_point, end_point) in enumerate(runs):
@@ -454,6 +484,7 @@ class Builder:
                     "stone",
                     "",
                 )
+
         path = site.get("path") or {}
         if path:
             x = path.get("x") or [self.b.width * 0.45, self.b.width * 0.55]
@@ -470,7 +501,7 @@ class Builder:
             )
 
     # ------------------------------------------------------------ exterior
-    def _side_geometry(self) -> dict[str, tuple[tuple[float, float], tuple[float, float], float]]:
+    def _side_geometry(self) -> dict[str, tuple[tuple[float, float], tuple[float, float], int]]:
         """side -> (start, end, axis index used for 't' along the wall)."""
         width = self.b.width
         depth = self.b.depth
@@ -495,13 +526,41 @@ class Builder:
             return (space.x0, space.x1)
         return (space.y0, space.y1)
 
+    def _record_space_opening(
+        self,
+        space: Space,
+        side: str,
+        t0: float,
+        t1: float,
+        *,
+        is_door: bool,
+    ) -> None:
+        if is_door:
+            self.space_doors_by_side.setdefault(space.id, {}).setdefault(side, []).append((t0, t1))
+            # A balcony or entrance opening is a frame you walk through, not a
+            # leaf that swings, so its approach zone is shallower than an
+            # interior door's.
+            clear = 0.60
+            if side == "front":
+                zone = (t0, space.y0, t1, min(space.y1, space.y0 + clear))
+            elif side == "back":
+                zone = (t0, max(space.y0, space.y1 - clear), t1, space.y1)
+            elif side == "left":
+                zone = (space.x0, t0, min(space.x1, space.x0 + clear), t1)
+            else:
+                zone = (max(space.x0, space.x1 - clear), t0, space.x1, t1)
+            self.door_clearance.setdefault(space.id, []).append(zone)
+        else:
+            self.space_windows.setdefault(space.id, set()).add(side)
+            self.space_windows_by_side.setdefault(space.id, {}).setdefault(side, []).append((t0, t1))
+
     def exterior_openings(self, storey: Storey) -> dict[str, list[dict]]:
         sides = self._side_geometry()
         result: dict[str, list[dict]] = {side: [] for side in sides}
         defaults = self.b.defaults
         explicit: set[tuple[str, str]] = set()
 
-        # balcony doors: a framed opening where each projecting balcony meets the wall
+        # Balcony doors: a framed opening where each projecting balcony meets the wall
         for balcony in self.b.balconies:
             if balcony.storey != storey.id:
                 continue
@@ -517,14 +576,24 @@ class Builder:
                 continue
             centre = (balcony.span[0] + balcony.span[1]) / 2.0
             head = min(2.35, storey.clear - 0.3)
+            t0 = centre - width / 2.0
+            t1 = centre + width / 2.0
+            owner_id = ""
+            for space in storey.spaces:
+                if self._touches(space, side):
+                    s0, s1 = self._span_along(space, side)
+                    if _overlap(t0, t1, s0, s1) > 0.25:
+                        owner_id = space.id
+                        break
             result[side].append(
                 {
-                    "t0": centre - width / 2.0,
-                    "t1": centre + width / 2.0,
+                    "t0": t0,
+                    "t1": t1,
                     "sill": 0.0,
                     "head": head,
                     "door": True,
                     "frame": True,
+                    "space": owner_id,
                 }
             )
 
@@ -543,7 +612,7 @@ class Builder:
             width = min(window.width, (end - start) - 0.2)
             if width <= 0.2:
                 continue
-            t0 = max(start, centre - width / 2.0)
+            t0 = max(start + 0.1, min(end - width - 0.1, centre - width / 2.0))
             result[side].append(
                 {
                     "t0": t0,
@@ -551,11 +620,12 @@ class Builder:
                     "sill": window.sill,
                     "head": window.head,
                     "glass": True,
+                    "space": space.id,
                 }
             )
             explicit.add((space.id, side))
 
-        # entrance door
+        # Main entrance door
         entrance = self.b.entrance
         if entrance["space"]:
             space = self.b.space(entrance["space"])
@@ -564,7 +634,8 @@ class Builder:
                 if side in sides and self._touches(space, side):
                     start, end = self._span_along(space, side)
                     width = min(entrance["width"], (end - start) - 0.2)
-                    centre = (start + end) / 2.0
+                    centre = (start + end) / 2.0 + entrance.get("offset", 0.0)
+                    centre = min(max(centre, start + width / 2.0 + 0.1), end - width / 2.0 - 0.1)
                     result[side].append(
                         {
                             "t0": centre - width / 2.0,
@@ -572,11 +643,13 @@ class Builder:
                             "sill": 0.0,
                             "head": entrance["height"],
                             "door": True,
+                            "entrance": True,
                             "frame": True,
+                            "space": space.id,
                         }
                     )
 
-        # automatic windows so a plain spec still yields a daylit house
+        # Automatic windows so a plain spec still yields a daylit house
         for space in storey.spaces:
             if space.type not in ("living", "bedroom", "kitchen", "dining", "study", "office", "lounge"):
                 continue
@@ -599,11 +672,12 @@ class Builder:
                     "sill": defaults["windowSill"],
                     "head": min(defaults["windowHead"], storey.clear - 0.3),
                     "glass": True,
+                    "space": space.id,
                 }
             )
 
         for side, openings in result.items():
-            # doors win: a balcony or entrance opening is structural, a window can move
+            # Doors win: a balcony or entrance opening is structural, a window can yields
             clean: list[dict] = []
 
             def collides(candidate: dict) -> bool:
@@ -624,6 +698,18 @@ class Builder:
                     continue
                 clean.append(opening)
             result[side] = clean
+
+            # Record finalized openings on each room's wall map for furniture placement
+            for item in clean:
+                for space in storey.spaces:
+                    if not self._touches(space, side):
+                        continue
+                    s0, s1 = self._span_along(space, side)
+                    ov0 = max(s0, item["t0"])
+                    ov1 = min(s1, item["t1"])
+                    if ov1 - ov0 > 0.15:
+                        self._record_space_opening(space, side, ov0, ov1, is_door=bool(item.get("door")))
+
         return result
 
     def build_exterior_walls(self, storey: Storey) -> None:
@@ -645,11 +731,97 @@ class Builder:
             )
 
     # ------------------------------------------------------------ interior
+    def _select_private_doors(self, storey: Storey) -> set[frozenset[str]]:
+        """Choose at most one automatic door for each private room on ``storey``.
+
+        Without this pass, a bedroom or bathroom touching two circulation spaces
+        (for example both the entry and the hall, or both a landing and a lounge)
+        would receive two separate doors.
+        """
+        selected: set[frozenset[str]] = set()
+        spaces = storey.spaces
+
+        for space in spaces:
+            if space.type not in PRIVATE_TYPES:
+                continue
+            # If the spec explicitly names a door for this room, honour the spec
+            if any(space.id in door.between for door in self.b.doors):
+                for door in self.b.doors:
+                    if space.id in door.between:
+                        selected.add(frozenset(door.between))
+                continue
+
+            best_pair: frozenset[str] | None = None
+            best_score = -1.0
+            for other in spaces:
+                if other.id == space.id:
+                    continue
+                if (space.type, other.type) in NO_DOOR_PAIRS or (other.type, space.type) in NO_DOOR_PAIRS:
+                    continue
+                shared = self._shared_edge(space, other)
+                if shared is None:
+                    continue
+                _kind, _line, start, end = shared
+                span = end - start
+                if span < 0.70:
+                    continue
+                if other.type in ("hall", "landing"):
+                    priority = 400.0
+                elif other.type == "entry":
+                    priority = 300.0
+                elif other.type in ("living", "lounge"):
+                    priority = 200.0
+                elif other.type == "dining":
+                    priority = 100.0
+                else:
+                    continue
+                score = priority + span
+                if score > best_score:
+                    best_score = score
+                    best_pair = frozenset({space.id, other.id})
+            if best_pair is not None:
+                selected.add(best_pair)
+        return selected
+
+    def _stair_entry_neighbor(self, stair_space: Space, storey: Storey) -> str | None:
+        """Identify the single circulation room that should open onto ``stair_space``."""
+        for door in self.b.doors:
+            if stair_space.id in door.between:
+                other_id = door.between[0] if door.between[1] == stair_space.id else door.between[1]
+                return other_id
+
+        best_id: str | None = None
+        best_score = -1.0
+        for other in storey.spaces:
+            if other.id == stair_space.id or other.type in PRIVATE_TYPES or other.type == "kitchen":
+                continue
+            shared = self._shared_edge(stair_space, other)
+            if shared is None:
+                continue
+            kind, line, start, end = shared
+            span = end - start
+            if span < 0.75:
+                continue
+            # Prefer the front/entry side of the stairwell (y = stair_space.y0)
+            at_foot = 200.0 if (kind == "h" and abs(line - stair_space.y0) < 0.05) else 0.0
+            role = 120.0 if other.type in ("hall", "landing", "entry") else 60.0
+            score = at_foot + role + span
+            if score > best_score:
+                best_score = score
+                best_id = other.id
+        return best_id
+
     def build_interior_walls(self, storey: Storey) -> None:
         thickness = self.b.defaults["interiorWall"]
         door_default = self.b.defaults["doorWidth"]
         door_height = self.b.defaults["doorHeight"]
         spaces = storey.spaces
+        allowed_private_doors = self._select_private_doors(storey)
+        stair_neighbors = {
+            space.id: self._stair_entry_neighbor(space, storey)
+            for space in spaces
+            if space.type == "stair"
+        }
 
         for i, first in enumerate(spaces):
             for second in spaces[i + 1 :]:
@@ -661,16 +833,16 @@ class Builder:
                 if span < 0.35:
                     continue
 
+                a = (start, line) if kind == "h" else (line, start)
+                b = (end, line) if kind == "h" else (line, end)
+                pair = frozenset({first.id, second.id})
                 door = self._door_for(first.id, second.id)
-                both_private = (
-                    first.type not in CIRCULATION_TYPES and second.type not in CIRCULATION_TYPES
-                )
-                if door is None and (both_private or (first.type, second.type) in NO_DOOR_PAIRS or (second.type, first.type) in NO_DOOR_PAIRS):
-                    # two private rooms back onto each other: solid wall, no opening
+
+                def solid_wall() -> None:
                     self.wall_run(
                         f"party_{first.id}_{second.id}",
-                        (start, line) if kind == "h" else (line, start),
-                        (end, line) if kind == "h" else (line, end),
+                        a,
+                        b,
                         thickness,
                         storey.base,
                         storey.clear,
@@ -678,29 +850,87 @@ class Builder:
                         "wall_inner",
                         storey.id,
                     )
+
+                # 1. Stairwell boundary: only open on the stair's entry edge to its hall/landing
+                if first.type == "stair" or second.type == "stair":
+                    stair_space = first if first.type == "stair" else second
+                    other_space = second if first.type == "stair" else first
+                    if stair_neighbors.get(stair_space.id) != other_space.id:
+                        solid_wall()
+                        continue
+                    # Open framed portal into the stairwell (no swinging door leaf blocking steps)
+                    width = min(max(1.15, span * 0.72), max(0.75, span - 0.24))
+                    height = min(storey.clear - 0.25, max(door_height, 2.25))
+                    centre = (start + end) / 2.0
+                    t0 = centre - width / 2.0 - start
+                    t1 = t0 + width
+                    self.wall_run(
+                        f"party_{first.id}_{second.id}",
+                        a,
+                        b,
+                        thickness,
+                        storey.base,
+                        storey.clear,
+                        [{"t0": t0, "t1": t1, "sill": 0.0, "head": height, "frame": True}],
+                        "wall_inner",
+                        storey.id,
+                    )
+                    self._record_interior_door(first, second, kind, line, start + t0, start + t1)
                     continue
 
-                both_circulation = (
-                    door is None
-                    and first.type in CIRCULATION_TYPES
-                    and second.type in CIRCULATION_TYPES
-                )
-                width = min(door.width if door else door_default, max(0.5, span - 0.3))
-                if both_circulation:
-                    # an open passage between living, dining and kitchen
-                    width = min(max(1.7, width), max(0.5, span - 0.3))
-                height = door.height if door else door_height
-                offset = door.offset if door else 0.0
-                centre = self._door_centre(first, second, kind, line, start, end, width, offset)
-                if centre is None:
+                # 2. Private rooms: each private room only gets its single selected door
+                if first.type in PRIVATE_TYPES or second.type in PRIVATE_TYPES:
+                    if pair not in allowed_private_doors:
+                        solid_wall()
+                        continue
+
+                # 3. Prohibited pairs without explicit override
+                if door is None and (
+                    (first.type, second.type) in NO_DOOR_PAIRS
+                    or (second.type, first.type) in NO_DOOR_PAIRS
+                ):
+                    solid_wall()
                     continue
+
+                # 4. Kitchen touching a hall/entry when it already opens to dining: keep solid
+                if door is None and {first.type, second.type} in ({"kitchen", "hall"}, {"kitchen", "landing"}, {"kitchen", "entry"}):
+                    has_dining = any(s.type == "dining" for s in spaces)
+                    if has_dining:
+                        solid_wall()
+                        continue
+
+                both_open_day = (
+                    first.type in OPEN_DAY_TYPES and second.type in OPEN_DAY_TYPES
+                )
+
+                width = min(door.width if door else door_default, max(0.5, span - 0.26))
+                if both_open_day:
+                    # Open daytime flow (Entry -> Living -> Dining -> Kitchen, Entry -> Hall)
+                    width = min(max(1.55, width), max(0.65, span - 0.30))
+                height = door.height if door else door_height
+
+                # Position the door: centered for open passages, corner-tucked for private rooms
+                if door and abs(door.offset) > 1e-4:
+                    centre = min(
+                        max((start + end) / 2.0 + door.offset, start + width / 2.0 + 0.12),
+                        end - width / 2.0 - 0.12,
+                    )
+                    hinge_at_t0 = True
+                elif both_open_day:
+                    centre = (start + end) / 2.0
+                    hinge_at_t0 = True
+                else:
+                    # Tuck the door 0.24 m from the start corner so the leaf swings
+                    # cleanly against the perpendicular wall and leaves the rest of the
+                    # wall unbroken for beds, wardrobes, or desks.
+                    lo = start + width / 2.0 + 0.12
+                    hi = end - width / 2.0 - 0.12
+                    preferred = min(max(start + 0.24 + width / 2.0, lo), hi)
+                    centre = preferred
+                    hinge_at_t0 = True
+
                 t0 = centre - width / 2.0 - start
                 t1 = t0 + width
-
-                if kind == "h":
-                    a, b = (start, line), (end, line)
-                else:
-                    a, b = (line, start), (line, end)
 
                 self.wall_run(
                     f"party_{first.id}_{second.id}",
@@ -709,41 +939,33 @@ class Builder:
                     thickness,
                     storey.base,
                     storey.clear,
-                    [{"t0": t0, "t1": t1, "sill": 0.0, "head": height}],
+                    [{"t0": t0, "t1": t1, "sill": 0.0, "head": height, "frame": True}],
                     "wall_inner",
                     storey.id,
                 )
 
-                # reserve the swing zone in front of the door so furniture
-                # never blocks the way through
-                clear = 0.95
-                if kind == "h":
-                    zone_x0, zone_x1 = a[0] + t0, a[0] + t1
-                    for space in (first, second):
-                        if space.y1 <= line + 1e-4:
-                            self.door_clearance.setdefault(space.id, []).append((zone_x0, line - clear, zone_x1, line))
-                        else:
-                            self.door_clearance.setdefault(space.id, []).append((zone_x0, line, zone_x1, line + clear))
-                else:
-                    zone_y0, zone_y1 = a[1] + t0, a[1] + t1
-                    for space in (first, second):
-                        if space.x1 <= line + 1e-4:
-                            self.door_clearance.setdefault(space.id, []).append((line - clear, zone_y0, line, zone_y1))
-                        else:
-                            self.door_clearance.setdefault(space.id, []).append((line, zone_y0, line + clear, zone_y1))
+                self._record_interior_door(first, second, kind, line, start + t0, start + t1)
 
-                # a hinged leaf the viewer swings open as you approach
-                larger = first if first.area >= second.area else second
-                if kind == "h":
-                    hinge = (start + t0, line)
-                    along = (1.0, 0.0)
-                    swing = (0.0, -1.0) if larger.center[1] < line else (0.0, 1.0)
-                else:
-                    hinge = (line, start + t0)
-                    along = (0.0, 1.0)
-                    swing = (-1.0, 0.0) if larger.center[0] < line else (1.0, 0.0)
-                if both_circulation:
+                if both_open_day:
                     continue
+
+                # Hinged door leaf swinging into the private room (or larger room)
+                target_room = (
+                    first
+                    if first.type in PRIVATE_TYPES and second.type not in PRIVATE_TYPES
+                    else second
+                    if second.type in PRIVATE_TYPES and first.type not in PRIVATE_TYPES
+                    else (first if first.area >= second.area else second)
+                )
+                if kind == "h":
+                    hinge = (start + t0 if hinge_at_t0 else start + t1, line)
+                    along = (1.0 if hinge_at_t0 else -1.0, 0.0)
+                    swing = (0.0, -1.0) if target_room.center[1] < line else (0.0, 1.0)
+                else:
+                    hinge = (line, start + t0 if hinge_at_t0 else start + t1)
+                    along = (0.0, 1.0 if hinge_at_t0 else -1.0)
+                    swing = (-1.0, 0.0) if target_room.center[0] < line else (1.0, 0.0)
+
                 self.door_leaf(
                     f"door_{first.id}_{second.id}",
                     storey,
@@ -754,6 +976,41 @@ class Builder:
                     height,
                     storey.id,
                 )
+
+    def _record_interior_door(
+        self,
+        first: Space,
+        second: Space,
+        kind: str,
+        line: float,
+        c0: float,
+        c1: float,
+    ) -> None:
+        """Record a doorway on both spaces' wall maps and reserve its approach zone.
+
+        A door needs standing room in front of it. A wide open passage does not:
+        a four-metre opening cannot be blocked by a table, and reserving a metre
+        of floor across it would empty the room. The zone depth therefore scales
+        with the opening width.
+        """
+        width = c1 - c0
+        clear = 1.00 if width <= 1.30 else 0.45
+        if kind == "h":
+            for space in (first, second):
+                if space.y1 <= line + 1e-4:
+                    self.space_doors_by_side.setdefault(space.id, {}).setdefault("back", []).append((c0, c1))
+                    self.door_clearance.setdefault(space.id, []).append((c0, max(space.y0, line - clear), c1, line))
+                else:
+                    self.space_doors_by_side.setdefault(space.id, {}).setdefault("front", []).append((c0, c1))
+                    self.door_clearance.setdefault(space.id, []).append((c0, line, c1, min(space.y1, line + clear)))
+        else:
+            for space in (first, second):
+                if space.x1 <= line + 1e-4:
+                    self.space_doors_by_side.setdefault(space.id, {}).setdefault("right", []).append((c0, c1))
+                    self.door_clearance.setdefault(space.id, []).append((max(space.x0, line - clear), c0, line, c1))
+                else:
+                    self.space_doors_by_side.setdefault(space.id, {}).setdefault("left", []).append((c0, c1))
+                    self.door_clearance.setdefault(space.id, []).append((line, c0, min(space.x1, line + clear), c1))
 
     def _shared_edge(self, first: Space, second: Space):
         """Return ("h"|"v", line, start, end) for the boundary two rooms share."""
@@ -775,57 +1032,6 @@ class Builder:
                 return ("v", second.x1, max(first.y0, second.y0), min(first.y1, second.y1))
         return None
 
-    def _door_centre(
-        self,
-        first: Space,
-        second: Space,
-        kind: str,
-        line: float,
-        start: float,
-        end: float,
-        width: float,
-        offset: float,
-    ) -> float | None:
-        """Slide a door along its shared wall until it clears the furniture."""
-        lo = start + width / 2.0 + 0.08
-        hi = end - width / 2.0 - 0.08
-        if hi < lo:
-            return None
-
-        margin = 0.14
-        blocked: list[tuple[float, float]] = []
-        for space in (first, second):
-            for rect in self.furniture_zones.get(space.id, []):
-                if kind == "h":
-                    near = min(abs(rect[1] - line), abs(rect[3] - line)) < 1.4
-                    a0, a1 = rect[0], rect[2]
-                else:
-                    near = min(abs(rect[0] - line), abs(rect[2] - line)) < 1.4
-                    a0, a1 = rect[1], rect[3]
-                if near:
-                    blocked.append((a0 - margin, a1 + margin))
-
-        preferred = (start + end) / 2.0 + offset
-        candidates = [preferred]
-        step = 0.12
-        position = lo
-        while position <= hi:
-            candidates.append(position)
-            position += step
-
-        best: float | None = None
-        best_cost = float("inf")
-        for candidate in candidates:
-            centre = min(max(candidate, lo), hi)
-            z0, z1 = centre - width / 2.0, centre + width / 2.0
-            overlap = sum(max(0.0, min(z1, b1) - max(z0, b0)) for b0, b1 in blocked)
-            cost = overlap * 10.0 + abs(centre - preferred) * 0.05
-            if overlap <= 1e-6:
-                return centre
-            if cost < best_cost:
-                best_cost = cost
-                best = centre
-        return best
     def _door_for(self, a: str, b: str):
         for door in self.b.doors:
             if set(door.between) == {a, b}:
@@ -840,14 +1046,14 @@ class Builder:
     def _build_straight_stair(self, stair: Stair, storey: Storey) -> None:
         """One straight flight from the front of the stair rectangle to the back."""
         rise_total = storey.height
-        depth_total = stair.y1 - stair.y0
-        width = min(stair.width, (stair.x1 - stair.x0) - 0.1)
-        if depth_total < 1.0 or width < 0.7:
+        flight = stair_flight(stair, storey)
+        width = flight["width"]
+        if flight["depth"] < 1.0 or width < 0.7:
             self.warnings.append(f'stair "{stair.id}" is too small to build and was skipped')
             return
-        steps_count = max(6, int(math.ceil(rise_total / 0.19)))
-        tread = depth_total / steps_count
-        rise = rise_total / steps_count
+        steps_count = flight["count"]
+        tread = flight["tread"]
+        rise = flight["riser"]
         if tread < 0.2:
             self.warnings.append(
                 f'stair "{stair.id}" has {tread * 100:.0f} cm treads; it will walk badly'
@@ -866,6 +1072,13 @@ class Builder:
                 storey.id,
                 support="stair",
             )
+            self.block(
+                self.name("stair_nosing", storey.id),
+                (centre_x, y0 + 0.035, top - 0.012),
+                (width - 0.02, 0.07, 0.024),
+                "nosing",
+                storey.id,
+            )
             steps.append({"flight": "a", "rect": [stair.x0, y0, stair.x1, y1], "top": top})
 
         self.stairs_manifest.append(
@@ -877,6 +1090,7 @@ class Builder:
                 "top": storey.base + rise_total,
             }
         )
+
     def _build_stair(self, stair: Stair) -> None:
         storey = self.b.storey(stair.storey)
         if storey is None:
@@ -890,12 +1104,13 @@ class Builder:
             self.warnings.append(f'stair "{stair.id}" has almost no depth and was skipped')
             return
 
-        width = max(0.85, min(stair.width, (stair.x1 - stair.x0) / 2.0 - 0.05))
-        n = max(6, int(math.ceil((rise_total / 2.0) / 0.19)))
-        landing_depth = min(max(1.0, width), depth_total * 0.4)
-        run = depth_total - landing_depth
-        tread = run / n
-        rise = rise_total / (2.0 * n)
+        flight = stair_flight(stair, storey)
+        width = flight["width"]
+        n = flight["count"]
+        landing_depth = flight["landing"]
+        run = flight["depth"] - landing_depth
+        tread = flight["tread"]
+        rise = flight["riser"]
         if tread < 0.2:
             self.warnings.append(
                 f'stair "{stair.id}" has {tread * 100:.0f} cm treads; it will walk badly'
@@ -920,6 +1135,13 @@ class Builder:
                 "slab",
                 storey.id,
                 support="stair",
+            )
+            self.block(
+                self.name("stair_nosing", storey.id),
+                ((flight_a_x0 + flight_a_x1) / 2.0, y0 + 0.035, top - 0.012),
+                (flight_a_x1 - flight_a_x0 - 0.02, 0.07, 0.024),
+                "nosing",
+                storey.id,
             )
             steps_manifest.append(
                 {"flight": "a", "rect": [flight_a_x0, y0, flight_a_x1, y1], "top": top}
@@ -951,9 +1173,52 @@ class Builder:
                 storey.id,
                 support="stair",
             )
+            self.block(
+                self.name("stair_nosing_b", storey.id),
+                ((flight_b_x0 + flight_b_x1) / 2.0, y0 + 0.035, top - 0.012),
+                (flight_b_x1 - flight_b_x0 - 0.02, 0.07, 0.024),
+                "nosing",
+                storey.id,
+            )
             steps_manifest.append(
                 {"flight": "b", "rect": [flight_b_x0, y0, flight_b_x1, y1], "top": top}
             )
+
+        # A solid spine wall fills the well between the two flights. A thin plate
+        # here leaves a slot wide enough to fall through, and a stair you can fall
+        # off sideways is worse than no stair at all.
+        gap_x0, gap_x1 = flight_a_x1, flight_b_x0
+        if gap_x1 - gap_x0 > 0.12:
+            self.block(
+                self.name("stair_spine", storey.id),
+                ((gap_x0 + gap_x1) / 2.0, stair.y0 + run / 2.0, base + half / 2.0),
+                (gap_x1 - gap_x0, run, half),
+                "wall_inner",
+                storey.id,
+                collider="wall",
+            )
+            self.block(
+                self.name("stair_handrail", storey.id),
+                ((gap_x0 + gap_x1) / 2.0, stair.y0 + run / 2.0, base + half + 0.02),
+                (gap_x1 - gap_x0 + 0.06, run + 0.04, 0.04),
+                "walnut",
+                storey.id,
+            )
+
+        # Warn when the flights do not meet the stairwell walls: the leftover
+        # strip beside a stair is a hole to fall down.
+        space = next((item for item in storey.spaces if item.id == stair.space), None) if hasattr(stair, "space") else None
+        for item in storey.spaces:
+            if item.type == "stair" and item.x0 <= stair.x0 and item.x1 >= stair.x1 and item.y0 <= stair.y0 and item.y1 >= stair.y1:
+                space = item
+                break
+        if space is not None:
+            side_gap = max(stair.x0 - space.x0, space.x1 - stair.x1)
+            if side_gap > 0.28:
+                self.warnings.append(
+                    f'stair "{stair.id}" leaves {side_gap * 100:.0f} cm beside the flights; '
+                    "widen the stair rectangle to the stairwell walls so nobody can fall down the well"
+                )
 
         self.stairs_manifest.append(
             {
@@ -964,6 +1229,7 @@ class Builder:
                 "top": base + rise_total,
             }
         )
+
     # ------------------------------------------------------------------ doors
     def door_leaf(
         self,
@@ -976,12 +1242,18 @@ class Builder:
         height: float,
         storey_id: str,
     ) -> None:
-        """A hinged door leaf, authored around its hinge so the viewer can swing it."""
+        """A hinged door leaf with lever handles, authored around its hinge."""
         if width < 0.4 or height < 1.0:
             return
         closed_yaw = math.atan2(along[1], along[0])
         open_yaw = math.atan2(swing[1], swing[0])
         mesh = box_xyz((width / 2.0, height / 2.0, 0.0), (width, height, 0.045))
+        # Add subtle lever handle geometry on both faces of the door leaf
+        handle_x = max(0.25, width - 0.10)
+        handle_y = min(1.00, height * 0.48)
+        mesh.merge(box_xyz((handle_x, handle_y, 0.0), (0.03, 0.03, 0.11)))
+        mesh.merge(box_xyz((handle_x - 0.05, handle_y, 0.052), (0.11, 0.022, 0.018)))
+        mesh.merge(box_xyz((handle_x - 0.05, handle_y, -0.052), (0.11, 0.022, 0.018)))
         self.glb.add_mesh(
             self.name(name, storey_id),
             mesh.positions,
@@ -997,6 +1269,7 @@ class Builder:
             translation=(hinge[0], storey.base, -hinge[1]),
             rotation_y=closed_yaw,
         )
+
     # ------------------------------------------------------------- balconies
     def build_balcony(self, balcony, storey: Storey) -> None:
         x0, y0, x1, y1 = balcony_rect(balcony, self.b)
@@ -1072,11 +1345,48 @@ class Builder:
     def build_roof(self) -> None:
         last = self.b.storeys[-1]
         thickness = self.b.defaults["slab"]
-        self.slab(last.id, thickness, last.top, None, "roof", "roof")
-        self.build_edge_band(last, "slab", level=last.top)
-
         roof = self.b.roof
         kind = roof.get("type", "terrace")
+
+        # If a stair climbs from the top storey to a walkable terrace roof,
+        # cut the stair opening in the roof slab and guard it with a balustrade.
+        hole = None
+        if kind in ("terrace", "flat"):
+            for stair in self.b.stairs:
+                if stair.storey == last.id:
+                    hole = (stair.x0, stair.y0, stair.x1, stair.y1)
+                    break
+
+        self.slab(last.id, thickness, last.top, hole, "roof", "roof")
+        self.build_edge_band(last, "slab", level=last.top)
+
+        if hole is not None:
+            hx0, hy0, hx1, hy1 = hole
+            rail = 1.05
+            # Guard the 3 non-exit sides of the roof stairwell opening
+            guards = [
+                ((hx0 + hx1) / 2.0, hy1, (hx1 - hx0, 0.04, rail), (hx1 - hx0 + 0.06, 0.08, 0.05)),
+                (hx0, (hy0 + hy1) / 2.0, (0.04, hy1 - hy0, rail), (0.08, hy1 - hy0 + 0.06, 0.05)),
+                (hx1, (hy0 + hy1) / 2.0, (0.04, hy1 - hy0, rail), (0.08, hy1 - hy0 + 0.06, 0.05)),
+            ]
+            for gx, gy, gsize, csize in guards:
+                self.block(
+                    self.name("roof_stair_glass", last.id),
+                    (gx, gy, last.top + rail / 2.0),
+                    gsize,
+                    "glass_clear",
+                    last.id,
+                    collider="rail",
+                )
+                self.block(
+                    self.name("roof_stair_cap", last.id),
+                    (gx, gy, last.top + rail + 0.025),
+                    csize,
+                    "metal",
+                    last.id,
+                    collider="rail",
+                )
+
         if kind in ("shed", "gable"):
             self._build_pitched_roof(last, kind)
             return
@@ -1101,16 +1411,23 @@ class Builder:
 
     # ------------------------------------------------------------ slab edge
     def build_edge_band(self, storey: Storey, material: str = "slab", level: float | None = None) -> None:
-        """A slightly proud slab edge at each floor: the shadow line a facade reads by."""
-        thickness = self.b.defaults["exteriorWall"] + 0.16
-        height = 0.24
-        z = (level if level is not None else storey.base) - 0.04 + height / 2.0
-        for _side, (start, end, _axis) in self._side_geometry().items():
-            length = math.hypot(end[0] - start[0], end[1] - start[1])
-            centre = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
-            horizontal = abs(end[1] - start[1]) < 1e-6
-            size = (length, thickness, height) if horizontal else (thickness, length, height)
-            self.block(self.name("edge_band", storey.id), (centre[0], centre[1], z), size, material, storey.id)
+        """A slightly proud slab edge at each floor: flush with the floor top, never protruding inside."""
+        ext = self.b.defaults["exteriorWall"]
+        band_depth = 0.08
+        height = 0.20
+        top = level if level is not None else storey.base
+        z = top - height / 2.0
+        outset = ext / 2.0 + band_depth / 2.0 - 0.01
+        w = self.b.width
+        d = self.b.depth
+        bands = [
+            ((w / 2.0, -outset), (w + outset * 2.0, band_depth, height)),
+            ((w / 2.0, d + outset), (w + outset * 2.0, band_depth, height)),
+            ((-outset, d / 2.0), (band_depth, d, height)),
+            ((w + outset, d / 2.0), (band_depth, d, height)),
+        ]
+        for (cx, cy), size in bands:
+            self.block(self.name("edge_band", storey.id), (cx, cy, z), size, material, storey.id)
 
     def _build_pitched_roof(self, last: Storey, kind: str) -> None:
         """Shed or gable roof sitting on the top slab, with an overhang at the eaves."""
@@ -1157,7 +1474,7 @@ class Builder:
         for index, half in enumerate(halves):
             self.emit(self.name(f"roof_gable_{index}", last.id), half, "roof", last.id)
 
-        # eaves fascia on the two long sides
+        # Eaves fascia on the two long sides
         for y_edge in (y0, y1):
             self.block(
                 self.name("roof_fascia", last.id),
@@ -1166,6 +1483,7 @@ class Builder:
                 "frame",
                 last.id,
             )
+
     # ---------------------------------------------------------- floor finish
     def build_floor_finish(self, storey: Storey) -> None:
         finish_by_type = {
@@ -1177,16 +1495,26 @@ class Builder:
             "garage": "paving",
             "entry": "paving",
         }
+        # Avoid pouring ceiling finish over the stair opening from the floor above
+        stair_hole = None
+        for stair in self.b.stairs:
+            if stair.storey == storey.id:
+                stair_hole = (stair.x0, stair.y0, stair.x1, stair.y1)
+                break
+
         for space in storey.spaces:
             material = finish_by_type.get(space.type, "oak_light")
-            self.block(
-                self.name("floor_finish", storey.id),
-                (space.center[0], space.center[1], storey.base + 0.008),
-                (space.width - 0.02, space.depth - 0.02, 0.016),
-                material,
-                storey.id,
-            )
-            if space.type not in ("terrace", "balcony", "garage"):
+            if space.type != "stair" or storey.index == 0:
+                self.block(
+                    self.name("floor_finish", storey.id),
+                    (space.center[0], space.center[1], storey.base + 0.008),
+                    (space.width - 0.02, space.depth - 0.02, 0.016),
+                    material,
+                    storey.id,
+                )
+            if space.type not in ("terrace", "balcony", "garage", "stair"):
+                if stair_hole and _rects_overlap((space.x0, space.y0, space.x1, space.y1), stair_hole):
+                    continue
                 self.block(
                     self.name("ceiling_finish", storey.id),
                     (space.center[0], space.center[1], storey.base + storey.clear + 0.01),
@@ -1197,13 +1525,16 @@ class Builder:
 
     # -------------------------------------------------------------- furniture
     def build_furniture(self, storey: Storey) -> None:
-        """Place furniture first and remember its footprints, so doors can avoid it."""
+        """Place furniture after all doors and windows on the storey are known."""
         for space in storey.spaces:
             pieces = furnish(
                 space,
                 storey.base + 0.02,
                 storey.clear,
                 glazed_sides=self.space_windows.get(space.id, set()),
+                doors_by_side=self.space_doors_by_side.get(space.id, {}),
+                windows_by_side=self.space_windows_by_side.get(space.id, {}),
+                door_zones=self.door_clearance.get(space.id, []),
             )
             for piece in pieces:
                 self.emit(
@@ -1268,21 +1599,21 @@ class Builder:
                 self.slab(storey.id, slab, storey.base, hole, "slab", "floor")
             self.build_edge_band(storey, "stone" if storey.index == 0 else "slab")
             self.build_floor_finish(storey)
-            # decide the openings once, so furniture knows which walls are glazed
+
+            # 1. Decide exterior openings (windows, entrance, balcony doors)
             self._openings_cache[storey.id] = self.exterior_openings(storey)
-            for side, items in self._openings_cache[storey.id].items():
-                for item in items:
-                    space_id = item.get("space")
-                    if space_id:
-                        self.space_windows.setdefault(space_id, set()).add(side)
-            # furniture first: doors then place themselves around it, not through it
-            self.build_furniture(storey)
             self.build_exterior_walls(storey)
             for balcony in self.b.balconies:
                 if balcony.storey == storey.id:
                     self.build_balcony(balcony, storey)
+
+            # 2. Decide interior walls, doorways, and door swing zones
             self.build_interior_walls(storey)
+
+            # 3. Furnish every room with complete knowledge of doors and windows
+            self.build_furniture(storey)
             self.build_lights(storey)
+
             self.spaces_manifest.extend(
                 {
                     "id": space.id,
@@ -1343,14 +1674,14 @@ class Builder:
         if space is not None and space.storey == ground.id:
             side = entrance["side"]
             if side in ("front", "back"):
-                door_x = (space.x0 + space.x1) / 2.0
+                door_x = (space.x0 + space.x1) / 2.0 + entrance.get("offset", 0.0)
                 outside = -2.4 if side == "front" else self.b.depth + 2.4
                 return {
                     "position": [door_x, ground.base - 0.15 + EYE_HEIGHT, -outside],
                     "yaw": 0.0 if side == "front" else math.pi,
                     "space": space.id,
                 }
-            door_y = (space.y0 + space.y1) / 2.0
+            door_y = (space.y0 + space.y1) / 2.0 + entrance.get("offset", 0.0)
             outside = -2.4 if side == "left" else self.b.width + 2.4
             return {
                 "position": [outside, ground.base - 0.15 + EYE_HEIGHT, -door_y],

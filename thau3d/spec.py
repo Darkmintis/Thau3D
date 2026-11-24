@@ -394,6 +394,7 @@ def _parse(raw: dict, path: Path | None) -> Building:
         "side": str(entrance_raw.get("side") or "front").lower(),
         "width": float(entrance_raw.get("width", 3.5)) * scale,
         "height": float(entrance_raw.get("height", 7.2)) * scale,
+        "offset": float(entrance_raw.get("offset", 0.0)) * scale,
     }
 
     roof_raw = dict(raw.get("roof") or {})
@@ -406,6 +407,39 @@ def _parse(raw: dict, path: Path | None) -> Building:
     }
 
     overrides = {str(k): str(v) for k, v in (raw.get("materials") or {}).items()}
+
+    # A stair belongs to the stairwell it stands in. When a stair rectangle stops
+    # short of that space's walls it leaves a walkable strip beside or behind the
+    # flights — and a strip beside a stair is a hole to fall down. Clamp small
+    # insets out to the stairwell walls; a deliberate large inset is left alone
+    # (that is a stair standing in a bigger room, not a well).
+    for stair in stairs:
+        storey = next((item for item in storeys if item.id == stair.storey), None)
+        if storey is None:
+            continue
+        well = next(
+            (
+                space
+                for space in storey.spaces
+                if space.type == "stair"
+                and space.x0 - 1e-3 <= stair.x0
+                and space.x1 + 1e-3 >= stair.x1
+                and space.y0 - 1e-3 <= stair.y0
+                and space.y1 + 1e-3 >= stair.y1
+            ),
+            None,
+        )
+        if well is None:
+            continue
+        edge = 0.12
+        if 0.0 < stair.x0 - well.x0 < 0.6:
+            stair.x0 = well.x0 + edge
+        if 0.0 < well.x1 - stair.x1 < 0.6:
+            stair.x1 = well.x1 - edge
+        if 0.0 < stair.y0 - well.y0 < 0.6:
+            stair.y0 = well.y0 + edge
+        if 0.0 < well.y1 - stair.y1 < 0.6:
+            stair.y1 = well.y1 - edge
 
     return Building(
         name=str(raw.get("name") or "Untitled"),

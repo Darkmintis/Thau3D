@@ -43,6 +43,9 @@ PALETTE: dict[str, MaterialDef] = {
     "stone": MaterialDef("#454B50", roughness=0.95),
     "stone_light": MaterialDef("#8A8781", roughness=0.93),
     "concrete": MaterialDef("#BFBDB6", roughness=0.9),
+    # trims: a room reads as finished because of the shadow lines, not the paint
+    "skirting": MaterialDef("#E4DED2", roughness=0.88),
+    "nosing": MaterialDef("#B9B2A4", roughness=0.8),
     # joinery and metal
     "frame": MaterialDef("#23292F", metallic=0.35, roughness=0.45),
     "metal": MaterialDef("#2B3238", metallic=0.75, roughness=0.32),
