@@ -2,8 +2,13 @@
 
 Everything here is a handful of boxes and cylinders placed against the walls of
 a room. That is deliberate: the point of Thau3D is a *readable, walkable* model
-produced in milliseconds, not a photo-real asset pack. Materials carry most of
-the realism, and swapping in real furniture GLBs later only changes this file.
+produced in milliseconds, not a photo-real asset pack.
+
+Crucially, placement is **wall- and door-aware**: each recipe queries the room's
+doorways, door-swing clearance zones, and windows before choosing which wall to
+anchor a piece against, and every furniture cluster is validated against the
+room's circulation zones so a bed, TV, wardrobe, or toilet never blocks a door
+or covers a window.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from .geometry import MeshData, box, cylinder
 from .spec import Space
 
 MM = 1.0
+WALL_ORDER = ("back", "left", "right", "front")
 
 
 @dataclass
@@ -22,73 +28,82 @@ class Piece:
     mesh: MeshData
     material: str
     blocks: bool = True
+    group: str = ""
+    plan_rect: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+
+
+def _rects_overlap(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+    margin: float = 0.0,
+) -> bool:
+    return (
+        a[0] < b[2] + margin
+        and a[2] > b[0] - margin
+        and a[1] < b[3] + margin
+        and a[3] > b[1] - margin
+    )
+
+
+def _rect_intersection_area(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+    margin: float = 0.0,
+) -> float:
+    dx = max(0.0, min(a[2] + margin, b[2]) - max(a[0] - margin, b[0]))
+    dy = max(0.0, min(a[3] + margin, b[3]) - max(a[1] - margin, b[1]))
+    return dx * dy
+
+
+def _interval_overlap(a0: float, a1: float, b0: float, b1: float, margin: float = 0.0) -> float:
+    return max(0.0, min(a1 + margin, b1) - max(a0 - margin, b0))
 
 
 class Furnisher:
-    """Small helper so the room recipes below stay readable."""
+    """Wall- and clearance-aware room furnisher."""
 
-    def __init__(self, space: Space, base_z: float, clear: float, glazed_sides: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        space: Space,
+        base_z: float,
+        clear: float,
+        glazed_sides: set[str] | None = None,
+        *,
+        doors_by_side: dict[str, list[tuple[float, float]]] | None = None,
+        windows_by_side: dict[str, list[tuple[float, float]]] | None = None,
+        door_zones: list[tuple[float, float, float, float]] | None = None,
+    ) -> None:
         self.space = space
         self.base = base_z
         self.clear = clear
         self.pieces: list[Piece] = []
-        self.glazed = glazed_sides or set()
+        self.glazed = set(glazed_sides or set())
+        self.doors_by_side: dict[str, list[tuple[float, float]]] = {
+            side: list((doors_by_side or {}).get(side, [])) for side in WALL_ORDER
+        }
+        self.windows_by_side: dict[str, list[tuple[float, float]]] = {
+            side: list((windows_by_side or {}).get(side, [])) for side in WALL_ORDER
+        }
+        for side in self.glazed:
+            if side in self.windows_by_side and not self.windows_by_side[side]:
+                u0, u1 = self.wall_span(side)
+                mid = (u0 + u1) / 2.0
+                half = (u1 - u0) * 0.28
+                self.windows_by_side[side].append((mid - half, mid + half))
+        self.door_zones: list[tuple[float, float, float, float]] = list(door_zones or [])
+        self.group_rects: dict[str, tuple[float, float, float, float]] = {}
 
     @property
     def tv_at_front(self) -> bool:
         """A television belongs on a solid wall, never under a window."""
-        return "front" not in self.glazed
+        return "front" not in self.glazed and not self.windows_by_side["front"]
 
     @property
     def head_at_back(self) -> bool:
         """A headboard belongs on a solid wall, never under a window."""
-        return "back" not in self.glazed
+        return "back" not in self.glazed and not self.windows_by_side["back"]
 
-    # -- primitives ---------------------------------------------------------
-    def block(
-        self,
-        name: str,
-        center: tuple[float, float],
-        size: tuple[float, float, float],
-        material: str,
-        *,
-        z: float | None = None,
-        blocks: bool = True,
-    ) -> None:
-        """Axis-aligned box; ``z`` is the bottom height above the floor."""
-        width, depth, height = size
-        bottom = self.base + (z if z is not None else 0.0)
-        self.pieces.append(
-            Piece(
-                name=name,
-                mesh=box((center[0], center[1], bottom + height / 2.0), (width, depth, height)),
-                material=material,
-                blocks=blocks,
-            )
-        )
-
-    def round(
-        self,
-        name: str,
-        center: tuple[float, float],
-        radius: float,
-        height: float,
-        material: str,
-        *,
-        z: float | None = None,
-        blocks: bool = True,
-    ) -> None:
-        bottom = self.base + (z if z is not None else 0.0)
-        self.pieces.append(
-            Piece(
-                name=name,
-                mesh=cylinder((center[0], center[1], bottom + height / 2.0), radius, height, 16),
-                material=material,
-                blocks=blocks,
-            )
-        )
-
-    # -- room helpers -------------------------------------------------------
+    # -- room dimensions ----------------------------------------------------
     @property
     def width(self) -> float:
         return self.space.width
@@ -105,206 +120,700 @@ class Furnisher:
     def cy(self) -> float:
         return (self.space.y0 + self.space.y1) / 2.0
 
-    def rug(self, width: float, depth: float) -> None:
-        self.block("rug", (self.cx, self.cy), (width, depth, 0.012), "rug", z=0.0, blocks=False)
+    def wall_span(self, wall: str) -> tuple[float, float]:
+        if wall in ("front", "back"):
+            return (self.space.x0, self.space.x1)
+        return (self.space.y0, self.space.y1)
+
+    def wall_length(self, wall: str) -> float:
+        u0, u1 = self.wall_span(wall)
+        return u1 - u0
+
+    def wall_depth(self, wall: str) -> float:
+        """Room dimension perpendicular to ``wall``."""
+        if wall in ("front", "back"):
+            return self.space.depth
+        return self.space.width
+
+    def wall_to_plan(
+        self,
+        wall: str,
+        u: float,
+        v: float,
+        w_along: float,
+        d_perp: float,
+    ) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float, float, float]]:
+        """Map wall-relative coordinates ``(u, v)`` and ``(w_along, d_perp)`` to plan space.
+
+        ``u`` is the coordinate along ``wall`` (x for front/back, y for left/right).
+        ``v`` is the perpendicular distance from ``wall`` into the room to the box center.
+        """
+        if wall == "front":
+            cx, cy = u, self.space.y0 + v
+            sx, sy = w_along, d_perp
+        elif wall == "back":
+            cx, cy = u, self.space.y1 - v
+            sx, sy = w_along, d_perp
+        elif wall == "left":
+            cx, cy = self.space.x0 + v, u
+            sx, sy = d_perp, w_along
+        else:  # "right"
+            cx, cy = self.space.x1 - v, u
+            sx, sy = d_perp, w_along
+        rect = (cx - sx / 2.0, cy - sy / 2.0, cx + sx / 2.0, cy + sy / 2.0)
+        return (cx, cy), (sx, sy), rect
+
+    def _record_group_rect(self, group: str, rect: tuple[float, float, float, float], blocks: bool) -> None:
+        if not group or not blocks:
+            return
+        if group in self.group_rects:
+            old = self.group_rects[group]
+            self.group_rects[group] = (
+                min(old[0], rect[0]),
+                min(old[1], rect[1]),
+                max(old[2], rect[2]),
+                max(old[3], rect[3]),
+            )
+        else:
+            self.group_rects[group] = rect
+
+    # -- primitives ---------------------------------------------------------
+    def block(
+        self,
+        name: str,
+        center: tuple[float, float],
+        size: tuple[float, float, float],
+        material: str,
+        *,
+        z: float | None = None,
+        blocks: bool = True,
+        group: str = "",
+    ) -> None:
+        """Axis-aligned box; ``z`` is the bottom height above the floor."""
+        width, depth, height = size
+        bottom = self.base + (z if z is not None else 0.0)
+        rect = (
+            center[0] - width / 2.0,
+            center[1] - depth / 2.0,
+            center[0] + width / 2.0,
+            center[1] + depth / 2.0,
+        )
+        tag = group or name
+        self._record_group_rect(tag, rect, blocks)
+        self.pieces.append(
+            Piece(
+                name=name,
+                mesh=box((center[0], center[1], bottom + height / 2.0), (width, depth, height)),
+                material=material,
+                blocks=blocks,
+                group=tag,
+                plan_rect=rect,
+            )
+        )
+
+    def wall_block(
+        self,
+        wall: str,
+        name: str,
+        u: float,
+        v: float,
+        size: tuple[float, float, float],
+        material: str,
+        *,
+        z: float | None = None,
+        blocks: bool = True,
+        group: str = "",
+    ) -> None:
+        """Place a box oriented relative to ``wall``: ``size`` is ``(w_along, d_perp, height)``."""
+        w_along, d_perp, height = size
+        (cx, cy), (sx, sy), _rect = self.wall_to_plan(wall, u, v, w_along, d_perp)
+        self.block(name, (cx, cy), (sx, sy, height), material, z=z, blocks=blocks, group=group or name)
+
+    def round(
+        self,
+        name: str,
+        center: tuple[float, float],
+        radius: float,
+        height: float,
+        material: str,
+        *,
+        z: float | None = None,
+        blocks: bool = True,
+        group: str = "",
+    ) -> None:
+        bottom = self.base + (z if z is not None else 0.0)
+        rect = (center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius)
+        tag = group or name
+        self._record_group_rect(tag, rect, blocks)
+        self.pieces.append(
+            Piece(
+                name=name,
+                mesh=cylinder((center[0], center[1], bottom + height / 2.0), radius, height, 16),
+                material=material,
+                blocks=blocks,
+                group=tag,
+                plan_rect=rect,
+            )
+        )
+
+    def wall_round(
+        self,
+        wall: str,
+        name: str,
+        u: float,
+        v: float,
+        radius: float,
+        height: float,
+        material: str,
+        *,
+        z: float | None = None,
+        blocks: bool = True,
+        group: str = "",
+    ) -> None:
+        (cx, cy), _, _ = self.wall_to_plan(wall, u, v, radius * 2.0, radius * 2.0)
+        self.round(name, (cx, cy), radius, height, material, z=z, blocks=blocks, group=group or name)
+
+    def rug(self, width: float, depth: float, center: tuple[float, float] | None = None) -> None:
+        pos = center or (self.cx, self.cy)
+        self.block("rug", pos, (width, depth, 0.012), "rug", z=0.0, blocks=False, group="rug")
+
+    # -- solver for wall-anchored furniture ---------------------------------
+    def placement_cost(
+        self,
+        wall: str,
+        u: float,
+        w_along: float,
+        d_perp: float,
+        *,
+        v_offset: float = 0.04,
+        avoid_windows: bool = True,
+        ignore_group: str = "",
+    ) -> float:
+        u0, u1 = self.wall_span(wall)
+        half = w_along / 2.0
+        if u - half < u0 + 0.06 or u + half > u1 - 0.06:
+            return 1e6
+        if d_perp + v_offset > self.wall_depth(wall) - 0.35:
+            return 1e6
+
+        _, _, rect = self.wall_to_plan(wall, u, v_offset + d_perp / 2.0, w_along, d_perp)
+        cost = 0.0
+
+        # Never block a door opening on this wall
+        for d0, d1 in self.doors_by_side.get(wall, []):
+            overlap = _interval_overlap(u - half, u + half, d0, d1, margin=0.14)
+            if overlap > 0:
+                cost += 5000.0 + overlap * 4000.0
+
+        # Never intrude into any doorway swing/approach zone
+        for zone in self.door_zones:
+            area = _rect_intersection_area(rect, zone, margin=0.06)
+            if area > 0:
+                cost += 4000.0 + area * 3000.0
+
+        # Never collide with already-placed blocking furniture groups
+        for group_name, existing in self.group_rects.items():
+            if group_name == ignore_group:
+                continue
+            area = _rect_intersection_area(rect, existing, margin=0.16)
+            if area > 0:
+                cost += 2500.0 + area * 2000.0
+
+        # Avoid placing tall/backed items over a window
+        if avoid_windows:
+            for w0, w1 in self.windows_by_side.get(wall, []):
+                overlap = _interval_overlap(u - half, u + half, w0, w1, margin=0.08)
+                if overlap > 0:
+                    cost += 450.0 + overlap * 400.0
+            if wall in self.glazed and not self.windows_by_side.get(wall):
+                cost += 350.0
+
+        # Slight preference for walls that have no doors at all
+        if self.doors_by_side.get(wall):
+            cost += 12.0
+
+        # Slight preference for centering along the wall
+        mid = (u0 + u1) / 2.0
+        cost += abs(u - mid) * 1.5
+        return cost
+
+    def find_wall_placement(
+        self,
+        w_along: float,
+        d_perp: float,
+        *,
+        v_offset: float = 0.04,
+        avoid_windows: bool = True,
+        prefer_walls: tuple[str, ...] = WALL_ORDER,
+        exclude_walls: set[str] | None = None,
+        ignore_group: str = "",
+    ) -> tuple[str, float]:
+        excluded = exclude_walls or set()
+        best_wall = prefer_walls[0]
+        best_u = sum(self.wall_span(best_wall)) / 2.0
+        best_cost = float("inf")
+
+        for rank, wall in enumerate(prefer_walls):
+            if wall in excluded:
+                continue
+            u0, u1 = self.wall_span(wall)
+            lo = u0 + w_along / 2.0 + 0.10
+            hi = u1 - w_along / 2.0 - 0.10
+            if hi < lo:
+                continue
+            mid = (u0 + u1) / 2.0
+            candidates = [mid]
+            cursor = lo
+            while cursor <= hi + 1e-6:
+                candidates.append(min(hi, cursor))
+                cursor += 0.14
+            for u in candidates:
+                cost = (
+                    self.placement_cost(
+                        wall,
+                        u,
+                        w_along,
+                        d_perp,
+                        v_offset=v_offset,
+                        avoid_windows=avoid_windows,
+                        ignore_group=ignore_group,
+                    )
+                    + rank * 2.5
+                )
+                if cost < best_cost:
+                    best_cost = cost
+                    best_wall = wall
+                    best_u = u
+        return best_wall, best_u
 
 
 # ---------------------------------------------------------------- bedrooms
 def _bedroom(f: Furnisher) -> None:
-    bed_w = min(1.65, max(1.2, f.width * 0.42))
-    bed_d = min(2.05, max(1.85, f.depth * 0.42))
-    back = f.head_at_back
-    sign = -1.0 if back else 1.0  # +1 means the bed runs toward +y
-    head_y = (f.space.y1 - 0.16) if back else (f.space.y0 + 0.16)
-    bed_cy = head_y + sign * (bed_d / 2.0 + 0.06)
-    bed_cx = f.cx
+    bed_w = min(1.65, max(1.2, f.width * 0.40))
+    bed_d = min(2.05, max(1.82, min(f.width, f.depth) * 0.46))
 
-    f.block("bed_base", (bed_cx, bed_cy), (bed_w, bed_d, 0.32), "oak", z=0.06)
-    f.block("bed_mattress", (bed_cx, bed_cy), (bed_w - 0.08, bed_d - 0.08, 0.24), "linen", z=0.38)
-    f.block("bed_duvet", (bed_cx, bed_cy + sign * 0.16), (bed_w - 0.02, bed_d - 0.6, 0.1), "bedding", z=0.62)
-    f.block("bed_throw", (bed_cx, bed_cy + sign * (bed_d / 2.0 - 0.32)), (bed_w - 0.02, 0.5, 0.08), "throw", z=0.66)
-    f.block("bed_headboard", (bed_cx, head_y), (bed_w + 0.2, 0.09, 1.1), "walnut", z=0.0)
-    for index, offset in enumerate((-0.28, 0.28)):
-        f.block(
-            f"bed_pillow_{index}",
-            (bed_cx + offset * bed_w, head_y + sign * 0.42),
-            (bed_w * 0.42, 0.34, 0.14),
-            "linen",
-            z=0.62,
-        )
-
-    for side, side_sign in (("l", -1.0), ("r", 1.0)):
-        nx = bed_cx + side_sign * (bed_w / 2.0 + 0.34)
-        if f.space.x0 + 0.3 < nx < f.space.x1 - 0.3:
-            f.block(f"nightstand_{side}", (nx, head_y + sign * 0.28), (0.42, 0.38, 0.52), "oak")
-            f.round(f"nightstand_lamp_{side}", (nx, head_y + sign * 0.28), 0.09, 0.3, "led", z=0.55, blocks=False)
-            f.block(f"nightstand_stem_{side}", (nx, head_y + sign * 0.28), (0.03, 0.03, 0.16), "metal", z=0.52, blocks=False)
-
-    wardrobe_w = min(1.8, f.width * 0.5)
-    f.block("wardrobe", (f.space.x0 + wardrobe_w / 2.0 + 0.2, f.cy), (wardrobe_w, 0.6, 2.3), "oak_light")
-    f.block(
-        "wardrobe_gap",
-        (f.space.x0 + wardrobe_w / 2.0 + 0.2, f.cy - 0.31),
-        (wardrobe_w - 0.1, 0.02, 2.1),
-        "walnut",
-        z=0.1,
-        blocks=False,
+    # Pick the cleanest wall for the headboard (no door, no window, room for bed depth)
+    wall, bed_u = f.find_wall_placement(
+        bed_w + 0.16,
+        bed_d + 0.14,
+        avoid_windows=True,
+        prefer_walls=("back", "left", "right", "front"),
+        ignore_group="bed",
     )
 
-    f.rug(min(2.6, f.width * 0.7), min(1.8, f.depth * 0.35))
+    f.wall_block(wall, "bed_headboard", bed_u, 0.08, (bed_w + 0.16, 0.09, 1.08), "walnut", z=0.0, group="bed")
+    bed_v = 0.12 + bed_d / 2.0
+    f.wall_block(wall, "bed_base", bed_u, bed_v, (bed_w, bed_d, 0.32), "oak", z=0.06, group="bed")
+    f.wall_block(wall, "bed_mattress", bed_u, bed_v, (bed_w - 0.08, bed_d - 0.08, 0.24), "linen", z=0.38, group="bed")
+    f.wall_block(wall, "bed_duvet", bed_u, bed_v + 0.16, (bed_w - 0.02, bed_d - 0.58, 0.10), "bedding", z=0.62, group="bed")
+    f.wall_block(
+        wall,
+        "bed_throw",
+        bed_u,
+        bed_v + bed_d / 2.0 - 0.30,
+        (bed_w - 0.02, 0.48, 0.08),
+        "throw",
+        z=0.66,
+        group="bed",
+    )
+    for index, offset in enumerate((-0.26, 0.26)):
+        f.wall_block(
+            wall,
+            f"bed_pillow_{index}",
+            bed_u + offset * bed_w,
+            0.36,
+            (bed_w * 0.40, 0.32, 0.13),
+            "linen",
+            z=0.62,
+            group="bed",
+        )
+
+    # Nightstands on either side of the headboard if clear of doors and corners
+    for side, side_sign in (("l", -1.0), ("r", 1.0)):
+        nu = bed_u + side_sign * (bed_w / 2.0 + 0.32)
+        group_id = f"nightstand_{side}"
+        if f.placement_cost(wall, nu, 0.42, 0.40, avoid_windows=False, ignore_group=group_id) < 400.0:
+            f.wall_block(wall, f"nightstand_{side}", nu, 0.24, (0.40, 0.36, 0.52), "oak", group=group_id)
+            f.wall_round(wall, f"nightstand_lamp_{side}", nu, 0.24, 0.09, 0.28, "led", z=0.55, blocks=False, group=group_id)
+            f.wall_block(wall, f"nightstand_stem_{side}", nu, 0.24, (0.03, 0.03, 0.16), "metal", z=0.52, blocks=False, group=group_id)
+
+    # Wardrobe on a different clear wall span, never colliding with the bed or doors
+    wardrobe_w = min(1.65, max(1.05, min(f.width, f.depth) * 0.38))
+    other_walls = tuple(w for w in ("left", "right", "back", "front") if w != wall) + (wall,)
+    w_wall, w_u = f.find_wall_placement(
+        wardrobe_w,
+        0.58,
+        avoid_windows=True,
+        prefer_walls=other_walls,
+        ignore_group="wardrobe",
+    )
+    if f.placement_cost(w_wall, w_u, wardrobe_w, 0.58, avoid_windows=True, ignore_group="wardrobe") < 800.0:
+        f.wall_block(w_wall, "wardrobe", w_u, 0.32, (wardrobe_w, 0.56, 2.22), "oak_light", group="wardrobe")
+        f.wall_block(
+            w_wall,
+            "wardrobe_gap",
+            w_u,
+            0.61,
+            (wardrobe_w - 0.10, 0.02, 2.04),
+            "walnut",
+            z=0.10,
+            blocks=False,
+            group="wardrobe",
+        )
+
+    (rug_x, rug_y), (rug_sx, rug_sy), _ = f.wall_to_plan(
+        wall,
+        bed_u,
+        min(f.wall_depth(wall) * 0.52, bed_v + 0.35),
+        min(2.4, f.wall_length(wall) * 0.65),
+        min(1.85, f.wall_depth(wall) * 0.42),
+    )
+    f.rug(rug_sx, rug_sy, center=(rug_x, rug_y))
 
 
+# ------------------------------------------------------------------ living
 def _living(f: Furnisher) -> None:
-    # TV goes on a wall without a window; the sofa faces it.
-    sign = 1.0 if f.tv_at_front else -1.0
-    sofa_wall = f.space.y1 if sign > 0 else f.space.y0
-    sofa_y = sofa_wall - sign * 0.62
-    sofa_w = min(2.5, max(1.8, f.width * 0.55))
+    # Choose the best solid wall for the media console & TV so the sofa can sit
+    # opposite it with a clear circulation path behind or alongside.
+    tv_w = min(1.85, max(1.25, min(f.width, f.depth) * 0.44))
+    wall, tv_u = f.find_wall_placement(
+        tv_w,
+        0.44,
+        avoid_windows=True,
+        prefer_walls=("left", "right", "back", "front"),
+        ignore_group="tv",
+    )
 
-    f.block("sofa_base", (f.cx, sofa_y), (sofa_w, 0.92, 0.42), "fabric_ivory", z=0.0)
-    f.block("sofa_back", (f.cx, sofa_y + sign * 0.36), (sofa_w, 0.2, 0.82), "fabric_ivory", z=0.0)
-    f.block("sofa_seat", (f.cx, sofa_y - sign * 0.1), (sofa_w - 0.16, 0.72, 0.14), "linen_dark", z=0.42)
-    for index, offset in enumerate((-0.22, 0.22)):
-        f.block(
+    room_d = f.wall_depth(wall)
+    sofa_w = min(2.35, max(1.65, min(f.wall_length(wall) * 0.54, 2.35)))
+    # Place the sofa facing the TV at a comfortable viewing distance (2.4 - 3.0 m),
+    # leaving a walkway behind the sofa whenever the room is deep enough.
+    sofa_v = min(room_d - 0.68, max(2.15, min(2.85, room_d * 0.66)))
+    table_v = (0.48 + sofa_v - 0.45) / 2.0 + 0.15
+
+    f.wall_block(wall, "media_console", tv_u, 0.25, (tv_w, 0.40, 0.46), "walnut", group="tv")
+    f.wall_block(wall, "tv_panel", tv_u, 0.12, (min(1.42, tv_w * 0.82), 0.06, 0.80), "appliance", z=0.86, blocks=False, group="tv")
+
+    f.wall_block(wall, "coffee_table", tv_u, table_v, (min(1.18, sofa_w * 0.56), 0.58, 0.06), "oak_light", z=0.38, group="coffee_table")
+    half_tw = min(1.18, sofa_w * 0.56) * 0.40
+    for index, (du, dv) in enumerate(((-half_tw, -0.22), (half_tw, -0.22), (-half_tw, 0.22), (half_tw, 0.22))):
+        f.wall_block(
+            wall,
+            f"coffee_table_leg_{index}",
+            tv_u + du,
+            table_v + dv,
+            (0.05, 0.05, 0.38),
+            "metal",
+            blocks=False,
+            group="coffee_table",
+        )
+
+    # Sofa facing the TV wall (so its backrest is at sofa_v + 0.34, away from the TV wall)
+    f.wall_block(wall, "sofa_base", tv_u, sofa_v, (sofa_w, 0.88, 0.42), "fabric_ivory", z=0.0, group="sofa")
+    f.wall_block(wall, "sofa_back", tv_u, sofa_v + 0.34, (sofa_w, 0.20, 0.82), "fabric_ivory", z=0.0, group="sofa")
+    f.wall_block(wall, "sofa_seat", tv_u, sofa_v - 0.08, (sofa_w - 0.16, 0.70, 0.14), "linen_dark", z=0.42, group="sofa")
+    for index, offset in enumerate((-0.24, 0.24)):
+        f.wall_block(
+            wall,
             f"sofa_cushion_{index}",
-            (f.cx + offset * sofa_w, sofa_y + sign * 0.2),
-            (0.4, 0.14, 0.4),
+            tv_u + offset * sofa_w,
+            sofa_v + 0.18,
+            (0.38, 0.14, 0.38),
             "fabric_sage" if index else "fabric_clay",
             z=0.56,
+            group="sofa",
         )
     for side, side_sign in (("l", -1.0), ("r", 1.0)):
-        f.block(f"sofa_arm_{side}", (f.cx + side_sign * sofa_w / 2.0, sofa_y), (0.14, 0.92, 0.62), "fabric_ivory", z=0.0)
+        f.wall_block(
+            wall,
+            f"sofa_arm_{side}",
+            tv_u + side_sign * sofa_w / 2.0,
+            sofa_v,
+            (0.14, 0.88, 0.62),
+            "fabric_ivory",
+            z=0.0,
+            group="sofa",
+        )
 
-    table_z = 0.38
-    table_y = sofa_y - sign * 1.5
-    f.block("coffee_table", (f.cx, table_y), (1.2, 0.62, 0.06), "oak_light", z=table_z)
-    for index, (dx, dy) in enumerate(((-0.5, -0.24), (0.5, -0.24), (-0.5, 0.24), (0.5, 0.24))):
-        f.block(f"coffee_table_leg_{index}", (f.cx + dx, table_y + dy), (0.05, 0.05, table_z), "metal", blocks=False)
-
-    tv_y = (f.space.y0 + 0.35) if sign > 0 else (f.space.y1 - 0.35)
-    f.block("media_console", (f.cx, tv_y), (min(1.9, f.width * 0.6), 0.4, 0.46), "walnut")
-    tv_panel_y = tv_y - sign * 0.23
-    f.block("tv_panel", (f.cx, tv_panel_y), (min(1.45, f.width * 0.5), 0.06, 0.82), "appliance", z=0.9, blocks=False)
-
-    f.rug(min(2.9, f.width * 0.8), min(2.0, f.depth * 0.42))
+    (rug_x, rug_y), (rug_sx, rug_sy), _ = f.wall_to_plan(
+        wall,
+        tv_u,
+        table_v + 0.15,
+        min(2.6, sofa_w + 0.4),
+        min(2.0, max(1.3, sofa_v - 0.65)),
+    )
+    f.rug(rug_sx, rug_sy, center=(rug_x, rug_y))
 
 
+# ----------------------------------------------------------------- kitchen
 def _kitchen(f: Furnisher) -> None:
-    run_w = f.width - 0.3
-    counter_y = f.space.y1 - 0.32
-    f.block("base_cabinets", (f.cx, counter_y), (run_w, 0.6, 0.86), "oak_light")
-    f.block("worktop", (f.cx, counter_y), (run_w + 0.04, 0.64, 0.05), "quartz", z=0.86)
-    f.block("backsplash", (f.cx, f.space.y1 - 0.06), (run_w, 0.05, 0.55), "ceramic", z=0.91, blocks=False)
-    f.block("wall_cabinets", (f.cx, f.space.y1 - 0.2), (run_w - 0.2, 0.36, 0.7), "oak_light", z=1.55)
+    # Counter can sit under a window (base counter height 0.91 m is below normal sills),
+    # so pick the longest door-free wall for the main counter run.
+    counter_wall = "back"
+    best_score = float("inf")
+    for candidate in ("back", "left", "right", "front"):
+        doors = len(f.doors_by_side.get(candidate, []))
+        score = doors * 100.0 - f.wall_length(candidate)
+        if score < best_score:
+            best_score = score
+            counter_wall = candidate
 
-    sink_x = f.space.x0 + run_w * 0.3
-    f.block("sink", (sink_x, counter_y), (0.55, 0.42, 0.04), "steel", z=0.87, blocks=False)
-    f.block("tap", (sink_x, counter_y + 0.22), (0.04, 0.04, 0.28), "metal", z=0.91, blocks=False)
-
-    hob_x = f.space.x0 + run_w * 0.66
-    f.block("hob", (hob_x, counter_y), (0.6, 0.5, 0.02), "appliance", z=0.91, blocks=False)
-
+    u0, u1 = f.wall_span(counter_wall)
+    wall_len = u1 - u0
+    run_w = min(wall_len - 0.32, max(1.6, wall_len * 0.78))
+    # Leave room at one end for the fridge if the wall is long enough
     fridge_w = 0.72
-    f.block("fridge", (f.space.x1 - fridge_w / 2.0 - 0.05, f.space.y1 - 0.38), (fridge_w, 0.68, 1.92), "steel")
+    has_window_on_counter = bool(f.windows_by_side.get(counter_wall)) or (counter_wall in f.glazed)
+    counter_u = (u0 + u1) / 2.0 - (fridge_w * 0.45 if wall_len > 2.8 else 0.0)
+    counter_u = max(u0 + run_w / 2.0 + 0.12, min(u1 - run_w / 2.0 - 0.12, counter_u))
 
-    if f.width > 3.2 and f.depth > 3.4:
-        island_w = min(2.2, f.width * 0.55)
-        island_y = f.space.y0 + 1.5
-        f.block("island", (f.cx, island_y), (island_w, 0.85, 0.9), "oak_light")
-        f.block("island_top", (f.cx, island_y), (island_w + 0.06, 0.92, 0.05), "quartz", z=0.9)
-        for index, offset in enumerate((-island_w / 4.0, island_w / 4.0)):
-            f.block(f"stool_{index}", (f.cx + offset, island_y - 0.72), (0.36, 0.36, 0.44), "fabric_clay")
-            f.round(f"stool_stem_{index}", (f.cx + offset, island_y - 0.72), 0.03, 0.24, "metal", z=0.0, blocks=False)
+    f.wall_block(counter_wall, "base_cabinets", counter_u, 0.32, (run_w, 0.60, 0.86), "oak_light", group="counter")
+    f.wall_block(counter_wall, "worktop", counter_u, 0.33, (run_w + 0.04, 0.64, 0.05), "quartz", z=0.86, group="counter")
+
+    # Only add full-width backsplash and high wall cabinets if this wall has no window;
+    # otherwise keep the window completely clear and put wall cabinets on an adjacent solid wall.
+    if not has_window_on_counter:
+        f.wall_block(
+            counter_wall,
+            "backsplash",
+            counter_u,
+            0.05,
+            (run_w, 0.04, 0.55),
+            "ceramic",
+            z=0.91,
+            blocks=False,
+            group="counter",
+        )
+        f.wall_block(
+            counter_wall,
+            "wall_cabinets",
+            counter_u,
+            0.20,
+            (run_w - 0.16, 0.36, 0.68),
+            "oak_light",
+            z=1.55,
+            blocks=False,
+            group="counter",
+        )
+
+    sink_u = counter_u - run_w * 0.22
+    f.wall_block(counter_wall, "sink", sink_u, 0.32, (0.54, 0.42, 0.04), "steel", z=0.87, blocks=False, group="counter")
+    f.wall_block(counter_wall, "tap", sink_u, 0.12, (0.04, 0.04, 0.28), "metal", z=0.91, blocks=False, group="counter")
+
+    hob_u = counter_u + run_w * 0.24
+    f.wall_block(counter_wall, "hob", hob_u, 0.32, (0.58, 0.48, 0.02), "appliance", z=0.91, blocks=False, group="counter")
+
+    # Place the tall fridge against a window-free, door-free spot
+    f_wall, f_u = f.find_wall_placement(
+        fridge_w + 0.08,
+        0.70,
+        avoid_windows=True,
+        prefer_walls=(counter_wall, "right", "left", "back", "front"),
+        ignore_group="fridge",
+    )
+    if f.placement_cost(f_wall, f_u, fridge_w + 0.08, 0.70, avoid_windows=True, ignore_group="fridge") < 800.0:
+        f.wall_block(f_wall, "fridge", f_u, 0.37, (fridge_w, 0.68, 1.92), "steel", group="fridge")
+
+    # Optional breakfast island in larger kitchens when clear of doorways
+    if f.wall_length(counter_wall) > 3.4 and f.wall_depth(counter_wall) > 3.3:
+        island_w = min(1.85, run_w * 0.62)
+        island_v = min(f.wall_depth(counter_wall) - 1.15, 2.05)
+        if f.placement_cost(
+            counter_wall,
+            counter_u,
+            island_w,
+            0.88,
+            v_offset=island_v - 0.44,
+            avoid_windows=False,
+            ignore_group="island",
+        ) < 400.0:
+            f.wall_block(counter_wall, "island", counter_u, island_v, (island_w, 0.82, 0.90), "oak_light", group="island")
+            f.wall_block(
+                counter_wall,
+                "island_top",
+                counter_u,
+                island_v,
+                (island_w + 0.06, 0.88, 0.05),
+                "quartz",
+                z=0.90,
+                group="island",
+            )
+            for index, offset in enumerate((-island_w * 0.26, island_w * 0.26)):
+                f.wall_block(
+                    counter_wall,
+                    f"stool_{index}",
+                    counter_u + offset,
+                    island_v + 0.66,
+                    (0.34, 0.34, 0.62),
+                    "fabric_clay",
+                    group="island",
+                )
 
 
 # ------------------------------------------------------------------ dining
 def _dining(f: Furnisher) -> None:
-    table_w = min(1.9, f.width * 0.62)
-    table_d = 0.9
-    f.block("table_top", (f.cx, f.cy), (table_w, table_d, 0.06), "oak", z=0.7)
-    for index, (dx, dy) in enumerate(((-0.75, -0.34), (0.75, -0.34), (-0.75, 0.34), (0.75, 0.34))):
-        f.block(f"table_leg_{index}", (f.cx + dx * table_w / 1.9, f.cy + dy), (0.06, 0.06, 0.7), "metal", blocks=False)
+    table_w = min(1.75, f.width * 0.52)
+    table_d = min(0.92, f.depth * 0.36)
+    f.block("table_top", (f.cx, f.cy), (table_w, table_d, 0.06), "oak", z=0.70, group="dining_table")
+    for index, (dx, dy) in enumerate(((-0.42, -0.36), (0.42, -0.36), (-0.42, 0.36), (0.42, 0.36))):
+        f.block(
+            f"table_leg_{index}",
+            (f.cx + dx * table_w, f.cy + dy * table_d),
+            (0.06, 0.06, 0.70),
+            "metal",
+            blocks=False,
+            group="dining_table",
+        )
     chair_offsets = (
-        (-0.5, -0.72, "n"), (0.5, -0.72, "n"),
-        (-0.5, 0.72, "s"), (0.5, 0.72, "s"),
+        (-0.26, -0.68, "n"),
+        (0.26, -0.68, "n"),
+        (-0.26, 0.68, "s"),
+        (0.26, 0.68, "s"),
     )
     for index, (dx, dy, _side) in enumerate(chair_offsets):
         chair_x = f.cx + dx * table_w
         chair_y = f.cy + dy
-        if not (f.space.y0 + 0.3 < chair_y < f.space.y1 - 0.3):
+        if not (f.space.y0 + 0.35 < chair_y < f.space.y1 - 0.35):
             continue
-        f.block(f"chair_{index}", (chair_x, chair_y), (0.42, 0.42, 0.05), "oak_light", z=0.44)
-        f.block(f"chair_back_{index}", (chair_x, chair_y + (0.19 if dy > 0 else -0.19)), (0.42, 0.05, 0.45), "oak_light", z=0.44)
+        f.block(f"chair_{index}", (chair_x, chair_y), (0.42, 0.42, 0.05), "oak_light", z=0.44, group="dining_table")
+        f.block(
+            f"chair_back_{index}",
+            (chair_x, chair_y + (0.19 if dy > 0 else -0.19)),
+            (0.42, 0.05, 0.45),
+            "oak_light",
+            z=0.44,
+            group="dining_table",
+        )
         for leg in (-1, 1):
-            f.block(f"chair_leg_{index}_{leg}", (chair_x + leg * 0.17, chair_y), (0.04, 0.4, 0.44), "metal", blocks=False)
+            f.block(
+                f"chair_leg_{index}_{leg}",
+                (chair_x + leg * 0.17, chair_y),
+                (0.04, 0.40, 0.44),
+                "metal",
+                blocks=False,
+                group="dining_table",
+            )
+    f.rug(min(2.5, table_w + 0.85), min(2.0, table_d + 1.05))
 
 
 # -------------------------------------------------------------------- bath
 def _bath(f: Furnisher) -> None:
-    small = f.width < 1.9 or f.depth < 1.9
+    vanity_w = min(0.86, max(0.58, min(f.width, f.depth) * 0.44))
+    v_wall, v_u = f.find_wall_placement(
+        vanity_w,
+        0.50,
+        avoid_windows=True,
+        prefer_walls=("back", "right", "left", "front"),
+        ignore_group="vanity",
+    )
+    f.wall_block(v_wall, "vanity", v_u, 0.27, (vanity_w, 0.48, 0.82), "oak_light", group="vanity")
+    f.wall_block(v_wall, "vanity_top", v_u, 0.28, (vanity_w + 0.04, 0.52, 0.04), "ceramic", z=0.82, group="vanity")
+    f.wall_block(v_wall, "basin", v_u, 0.28, (vanity_w * 0.58, 0.30, 0.03), "ceramic", z=0.85, blocks=False, group="vanity")
+    f.wall_block(v_wall, "mirror", v_u, 0.03, (vanity_w * 0.82, 0.03, 0.82), "mirror", z=1.12, blocks=False, group="vanity")
 
-    vanity_w = min(0.9, f.width * 0.5)
-    f.block("vanity", (f.space.x0 + vanity_w / 2.0 + 0.05, f.space.y1 - 0.3), (vanity_w, 0.48, 0.82), "oak_light")
-    f.block("vanity_top", (f.space.x0 + vanity_w / 2.0 + 0.05, f.space.y1 - 0.3), (vanity_w + 0.04, 0.52, 0.04), "ceramic", z=0.82)
-    f.block("basin", (f.space.x0 + vanity_w / 2.0 + 0.05, f.space.y1 - 0.3), (vanity_w * 0.6, 0.3, 0.03), "ceramic", z=0.85, blocks=False)
-    f.block("mirror", (f.space.x0 + vanity_w / 2.0 + 0.05, f.space.y1 - 0.04), (vanity_w * 0.8, 0.03, 0.8), "mirror", z=1.15, blocks=False)
+    wc_wall, wc_u = f.find_wall_placement(
+        0.48,
+        0.64,
+        avoid_windows=False,
+        prefer_walls=("right", "left", "back", "front"),
+        ignore_group="wc",
+    )
+    f.wall_block(wc_wall, "wc_pan", wc_u, 0.36, (0.38, 0.52, 0.42), "ceramic", group="wc")
+    f.wall_block(wc_wall, "wc_cistern", wc_u, 0.12, (0.42, 0.18, 0.40), "ceramic", z=0.42, group="wc")
 
-    wc_x = f.space.x0 + 0.35
-    wc_y = f.space.y0 + 0.45
-    f.block("wc_pan", (wc_x, wc_y), (0.38, 0.52, 0.42), "ceramic")
-    f.block("wc_cistern", (wc_x, wc_y + 0.28), (0.42, 0.18, 0.4), "ceramic", z=0.42)
-
-    if small:
-        tray = min(f.width * 0.5, 0.9)
-        f.block("shower_tray", (f.space.x1 - tray / 2.0 - 0.06, f.space.y1 - tray / 2.0 - 0.06), (tray, tray, 0.06), "ceramic")
-        f.block("shower_screen", (f.space.x1 - tray - 0.06, f.space.y1 - tray / 2.0 - 0.06), (0.03, tray, 1.9), "glass_clear", z=0.06, blocks=False)
-    else:
-        tray = min(f.width * 0.45, 1.0)
-        f.block("shower_tray", (f.space.x1 - tray / 2.0 - 0.06, f.space.y1 - tray / 2.0 - 0.06), (tray, tray, 0.06), "ceramic")
-        f.block("shower_screen", (f.space.x1 - tray - 0.06, f.space.y1 - tray / 2.0 - 0.06), (0.03, tray, 2.0), "glass_clear", z=0.06, blocks=False)
-        f.round("shower_head", (f.space.x1 - tray / 2.0, f.space.y1 - 0.2), 0.1, 0.03, "steel", z=2.05, blocks=False)
+    tray = min(0.92, min(f.width, f.depth) * 0.42)
+    s_wall, s_u = f.find_wall_placement(
+        tray,
+        tray,
+        avoid_windows=False,
+        prefer_walls=("back", "right", "left", "front"),
+        ignore_group="shower",
+    )
+    if f.placement_cost(s_wall, s_u, tray, tray, avoid_windows=False, ignore_group="shower") < 1200.0:
+        f.wall_block(s_wall, "shower_tray", s_u, tray / 2.0 + 0.05, (tray, tray, 0.05), "ceramic", blocks=False, group="shower")
+        f.wall_block(
+            s_wall,
+            "shower_screen",
+            s_u,
+            tray + 0.04,
+            (tray * 0.88, 0.03, 1.95),
+            "glass_clear",
+            z=0.05,
+            blocks=False,
+            group="shower",
+        )
+        f.wall_round(s_wall, "shower_head", s_u, 0.22, 0.10, 0.03, "steel", z=2.05, blocks=False, group="shower")
 
 
 # ------------------------------------------------------------------- entry
 def _entry(f: Furnisher) -> None:
-    if f.width < 1.4:
+    if min(f.width, f.depth) < 1.35:
         return
-    console_w = min(1.3, f.width * 0.6)
-    f.block("console", (f.space.x0 + console_w / 2.0 + 0.12, f.cy), (console_w, 0.34, 0.8), "walnut")
-    f.block("mirror", (f.space.x0 + 0.04, f.cy), (0.03, console_w * 0.8, 0.9), "mirror", z=1.1, blocks=False)
-    f.round("vase", (f.space.x0 + console_w / 2.0 + 0.12, f.cy), 0.09, 0.3, "terracotta", z=0.8, blocks=False)
+    console_w = min(1.15, max(0.75, min(f.width, f.depth) * 0.44))
+    wall, u = f.find_wall_placement(
+        console_w,
+        0.34,
+        avoid_windows=True,
+        prefer_walls=("right", "left", "back", "front"),
+        ignore_group="console",
+    )
+    if f.placement_cost(wall, u, console_w, 0.34, avoid_windows=True, ignore_group="console") > 500.0:
+        return
+    f.wall_block(wall, "console", u, 0.19, (console_w, 0.32, 0.80), "walnut", group="console")
+    f.wall_block(wall, "mirror", u, 0.03, (console_w * 0.78, 0.03, 0.90), "mirror", z=1.08, blocks=False, group="console")
+    f.wall_round(wall, "vase", u, 0.19, 0.08, 0.28, "terracotta", z=0.80, blocks=False, group="console")
 
 
 # ------------------------------------------------------------------- study
 def _study(f: Furnisher) -> None:
-    desk_w = min(1.5, f.width * 0.7)
-    f.block("desk_top", (f.cx, f.space.y1 - 0.5), (desk_w, 0.62, 0.05), "oak", z=0.72)
-    for index, dx in enumerate((-0.42, 0.42)):
-        f.block(f"desk_leg_{index}", (f.cx + dx * desk_w, f.space.y1 - 0.5), (0.05, 0.56, 0.72), "metal", blocks=False)
-    f.block("chair", (f.cx, f.space.y1 - 1.15), (0.46, 0.46, 0.06), "fabric_sage", z=0.44)
-    f.block("chair_back", (f.cx, f.space.y1 - 0.95), (0.46, 0.06, 0.5), "fabric_sage", z=0.44)
-    f.block("shelf", (f.space.x1 - 0.6, f.cy), (0.3, min(1.4, f.depth * 0.6), 0.04), "oak_light", z=1.5, blocks=False)
+    desk_w = min(1.45, max(1.0, min(f.width, f.depth) * 0.48))
+    wall, u = f.find_wall_placement(
+        desk_w,
+        1.25,
+        avoid_windows=False,
+        prefer_walls=("back", "left", "right", "front"),
+        ignore_group="desk",
+    )
+    f.wall_block(wall, "desk_top", u, 0.38, (desk_w, 0.62, 0.05), "oak", z=0.72, group="desk")
+    for index, du in enumerate((-0.42, 0.42)):
+        f.wall_block(wall, f"desk_leg_{index}", u + du * desk_w, 0.38, (0.05, 0.56, 0.72), "metal", blocks=False, group="desk")
+    f.wall_block(wall, "chair", u, 0.98, (0.46, 0.46, 0.06), "fabric_sage", z=0.44, group="desk")
+    f.wall_block(wall, "chair_back", u, 1.18, (0.46, 0.06, 0.50), "fabric_sage", z=0.44, group="desk")
+
+    shelf_w = min(1.4, max(0.85, min(f.width, f.depth) * 0.42))
+    s_wall, s_u = f.find_wall_placement(
+        shelf_w,
+        0.34,
+        avoid_windows=True,
+        prefer_walls=("left", "right", "back", "front"),
+        ignore_group="shelf",
+    )
+    f.wall_block(s_wall, "shelf", s_u, 0.18, (shelf_w, 0.28, 0.04), "oak_light", z=1.48, blocks=False, group="shelf")
 
 
 # ----------------------------------------------------------------- outdoor
 def _outdoor(f: Furnisher) -> None:
-    f.block("bench", (f.cx, f.space.y1 - 0.5), (min(1.6, f.width * 0.6), 0.42, 0.42), "oak_light")
-    for index, offset in enumerate((-0.6, 0.6)):
-        px = f.cx + offset * min(1.6, f.width * 0.6)
-        if f.space.x0 + 0.3 < px < f.space.x1 - 0.3:
-            f.round(f"planter_{index}", (px, f.space.y0 + 0.5), 0.18, 0.4, "terracotta")
-            f.round(f"plant_{index}", (px, f.space.y0 + 0.5), 0.24, 0.5, "foliage", z=0.4, blocks=False)
+    bench_w = min(1.5, max(0.9, min(f.width, f.depth) * 0.48))
+    wall, u = f.find_wall_placement(bench_w, 0.46, avoid_windows=False, ignore_group="bench")
+    f.wall_block(wall, "bench", u, 0.30, (bench_w, 0.42, 0.42), "oak_light", group="bench")
+    for index, offset in enumerate((-0.72, 0.72)):
+        pu = u + offset * bench_w
+        u0, u1 = f.wall_span(wall)
+        if u0 + 0.32 < pu < u1 - 0.32:
+            f.wall_round(wall, f"planter_{index}", pu, 0.32, 0.18, 0.40, "terracotta", group=f"planter_{index}")
+            f.wall_round(wall, f"plant_{index}", pu, 0.32, 0.24, 0.50, "foliage", z=0.40, blocks=False, group=f"planter_{index}")
 
 
 # ------------------------------------------------------------------ utility
 def _utility(f: Furnisher) -> None:
-    f.block("washer", (f.space.x0 + 0.5, f.space.y0 + 0.5), (0.6, 0.6, 0.85), "steel")
-    f.block("shelf", (f.cx, f.space.y1 - 0.25), (min(1.6, f.width * 0.7), 0.3, 0.04), "metal", z=1.6, blocks=False)
+    wall, u = f.find_wall_placement(0.65, 0.65, avoid_windows=False, ignore_group="washer")
+    f.wall_block(wall, "washer", u, 0.36, (0.60, 0.60, 0.85), "steel", group="washer")
+    f.wall_block(wall, "shelf", u, 0.18, (min(1.4, f.wall_length(wall) * 0.6), 0.30, 0.04), "metal", z=1.55, blocks=False, group="washer")
 
 
 # ------------------------------------------------------------------- garage
 def _garage(f: Furnisher) -> None:
-    f.block("paving", (f.cx, f.cy), (f.width - 0.1, f.depth - 0.1, 0.02), "paving", z=0.0, blocks=False)
+    f.block("paving", (f.cx, f.cy), (f.width - 0.1, f.depth - 0.1, 0.02), "paving", z=0.0, blocks=False, group="paving")
 
 
 RECIPES = {
@@ -316,7 +825,6 @@ RECIPES = {
     "bath": _bath,
     "wc": _bath,
     "entry": _entry,
-    "hall": _entry,
     "study": _study,
     "office": _study,
     "terrace": _outdoor,
@@ -326,12 +834,43 @@ RECIPES = {
 }
 
 
-def furnish(space: Space, base_z: float, clear: float, glazed_sides: set[str] | None = None) -> list[Piece]:
+def furnish(
+    space: Space,
+    base_z: float,
+    clear: float,
+    glazed_sides: set[str] | None = None,
+    *,
+    doors_by_side: dict[str, list[tuple[float, float]]] | None = None,
+    windows_by_side: dict[str, list[tuple[float, float]]] | None = None,
+    door_zones: list[tuple[float, float, float, float]] | None = None,
+) -> list[Piece]:
     recipe = RECIPES.get(space.type)
-    if recipe is None or space.type in ("stair", "store"):
+    if recipe is None or space.type in ("stair", "store", "hall", "landing"):
         return []
     if space.area < 2.0:
         return []
-    furnisher = Furnisher(space, base_z, clear, glazed_sides)
+    furnisher = Furnisher(
+        space,
+        base_z,
+        clear,
+        glazed_sides,
+        doors_by_side=doors_by_side,
+        windows_by_side=windows_by_side,
+        door_zones=door_zones,
+    )
     recipe(furnisher)
+
+    # Final group-level safety filter. The solver already steers furniture away
+    # from doors; this only removes a group that still sits squarely in a doorway.
+    # The threshold matters: dropping on any contact at all empties rooms whose
+    # doors are simply wide.
+    if furnisher.door_zones:
+        bad_groups: set[str] = set()
+        for group_name, rect in furnisher.group_rects.items():
+            for zone in furnisher.door_zones:
+                if _rect_intersection_area(rect, zone, margin=0.0) > 0.25:
+                    bad_groups.add(group_name)
+                    break
+        if bad_groups:
+            return [piece for piece in furnisher.pieces if piece.group not in bad_groups]
     return furnisher.pieces
