@@ -436,8 +436,10 @@ def _parse(raw: dict, path: Path | None) -> Building:
             stair.x0 = well.x0 + edge
         if 0.0 < well.x1 - stair.x1 < 0.6:
             stair.x1 = well.x1 - edge
-        if 0.0 < stair.y0 - well.y0 < 0.6:
-            stair.y0 = well.y0 + edge
+        # The sides and the back are closed by walls, so the flights are pushed out
+        # to them. The front is left alone on purpose: that strip of floor is the
+        # approach to the first step, and it is also where you stand when you
+        # arrive from the stair below.
         if 0.0 < well.y1 - stair.y1 < 0.6:
             stair.y1 = well.y1 - edge
 
