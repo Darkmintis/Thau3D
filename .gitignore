@@ -22,3 +22,6 @@ node_modules/
 .vscode/
 .shots/
 *.log
+
+# the root workspace declares no dependencies; only viewer/ pins versions
+/pnpm-lock.yaml
