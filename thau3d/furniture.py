@@ -745,6 +745,74 @@ def _bath(f: Furnisher) -> None:
         f.wall_round(s_wall, "shower_head", s_u, 0.22, 0.10, 0.03, "steel", z=2.05, blocks=False, group="shower")
 
 
+# ------------------------------------------------------------------- study
+def _study(f: Furnisher) -> None:
+    desk_w = min(1.45, max(1.0, min(f.width, f.depth) * 0.48))
+    wall, u = f.find_wall_placement(
+        desk_w,
+        1.25,
+        avoid_windows=False,
+        prefer_walls=("back", "left", "right", "front"),
+        ignore_group="desk",
+    )
+    f.wall_block(wall, "desk_top", u, 0.38, (desk_w, 0.62, 0.05), "oak", z=0.72, group="desk")
+    for index, du in enumerate((-0.42, 0.42)):
+        f.wall_block(wall, f"desk_leg_{index}", u + du * desk_w, 0.38, (0.05, 0.56, 0.72), "metal", blocks=False, group="desk")
+    f.wall_block(wall, "chair", u, 0.98, (0.46, 0.46, 0.06), "fabric_sage", z=0.44, group="desk")
+    f.wall_block(wall, "chair_back", u, 1.18, (0.46, 0.06, 0.50), "fabric_sage", z=0.44, group="desk")
+    # A desk lamp is what makes a study look used rather than staged.
+    f.wall_round(wall, "desk_lamp", u + desk_w * 0.34, 0.30, 0.07, 0.26, "led", z=0.77, blocks=False, group="desk")
+    f.wall_block(wall, "desk_lamp_stem", u + desk_w * 0.34, 0.30, (0.03, 0.03, 0.10), "metal", z=0.77, blocks=False, group="desk")
+
+    # Full-height bookcase on a solid wall, clear of doors and windows.
+    book_w = min(1.6, max(1.0, min(f.width, f.depth) * 0.42))
+    b_wall, b_u = f.find_wall_placement(
+        book_w,
+        0.34,
+        avoid_windows=True,
+        prefer_walls=("left", "right", "back", "front"),
+        ignore_group="bookcase",
+    )
+    if f.placement_cost(b_wall, b_u, book_w, 0.34, avoid_windows=True, ignore_group="bookcase") < 900.0:
+        f.wall_block(b_wall, "bookcase", b_u, 0.19, (book_w, 0.32, 2.05), "oak_light", group="bookcase")
+        for index in range(4):
+            f.wall_block(
+                b_wall,
+                f"bookcase_shelf_{index}",
+                b_u,
+                0.19,
+                (book_w - 0.08, 0.02, 0.03),
+                "walnut",
+                z=0.36 + index * 0.42,
+                blocks=False,
+                group="bookcase",
+            )
+            for side in (-1, 1):
+                f.wall_block(
+                    b_wall,
+                    f"book_row_{index}_{side}",
+                    b_u + side * book_w * 0.24,
+                    0.16,
+                    (book_w * 0.34, 0.20, 0.24),
+                    "fabric_clay" if index % 2 else "fabric_sage",
+                    z=0.40 + index * 0.42,
+                    blocks=False,
+                    group="bookcase",
+                )
+
+    # Reading chair in a corner, only if it does not crowd a doorway.
+    chair_wall, chair_u = f.find_wall_placement(
+        0.8, 0.8, avoid_windows=False, prefer_walls=("right", "left", "back", "front"), ignore_group="reading"
+    )
+    if f.placement_cost(chair_wall, chair_u, 0.8, 0.8, avoid_windows=False, ignore_group="reading") < 900.0:
+        f.wall_block(chair_wall, "reading_chair", chair_u, 0.52, (0.68, 0.68, 0.40), "fabric_clay", group="reading")
+        f.wall_block(chair_wall, "reading_chair_back", chair_u, 0.84, (0.68, 0.14, 0.72), "fabric_clay", z=0.40, group="reading")
+        f.wall_round(chair_wall, "reading_lamp", chair_u + 0.62, 0.52, 0.11, 0.34, "led", z=1.45, blocks=False, group="reading")
+        f.wall_block(chair_wall, "reading_lamp_stem", chair_u + 0.62, 0.52, (0.03, 0.03, 1.10), "metal", z=0.35, blocks=False, group="reading")
+
+    f.rug(min(2.6, f.width * 0.55), min(2.0, f.depth * 0.42))
+
+
 # ------------------------------------------------------------------- entry
 def _entry(f: Furnisher) -> None:
     if min(f.width, f.depth) < 1.35:
@@ -761,34 +829,37 @@ def _entry(f: Furnisher) -> None:
         return
     f.wall_block(wall, "console", u, 0.19, (console_w, 0.32, 0.80), "walnut", group="console")
     f.wall_block(wall, "mirror", u, 0.03, (console_w * 0.78, 0.03, 0.90), "mirror", z=1.08, blocks=False, group="console")
-    f.wall_round(wall, "vase", u, 0.19, 0.08, 0.28, "terracotta", z=0.80, blocks=False, group="console")
+    f.wall_round(wall, "vase", u - console_w * 0.28, 0.19, 0.08, 0.28, "terracotta", z=0.80, blocks=False, group="console")
+    f.wall_block(wall, "entry_tray", u + console_w * 0.26, 0.19, (0.22, 0.16, 0.03), "brass", z=0.80, blocks=False, group="console")
 
-
-# ------------------------------------------------------------------- study
-def _study(f: Furnisher) -> None:
-    desk_w = min(1.45, max(1.0, min(f.width, f.depth) * 0.48))
-    wall, u = f.find_wall_placement(
-        desk_w,
-        1.25,
-        avoid_windows=False,
-        prefer_walls=("back", "left", "right", "front"),
-        ignore_group="desk",
+    # Bench to sit on while you take your shoes off, on an adjacent clear wall.
+    bench_w = min(0.95, max(0.6, min(f.width, f.depth) * 0.38))
+    b_wall, b_u = f.find_wall_placement(
+        bench_w, 0.36, avoid_windows=True, prefer_walls=("left", "right", "back", "front"), ignore_group="bench"
     )
-    f.wall_block(wall, "desk_top", u, 0.38, (desk_w, 0.62, 0.05), "oak", z=0.72, group="desk")
-    for index, du in enumerate((-0.42, 0.42)):
-        f.wall_block(wall, f"desk_leg_{index}", u + du * desk_w, 0.38, (0.05, 0.56, 0.72), "metal", blocks=False, group="desk")
-    f.wall_block(wall, "chair", u, 0.98, (0.46, 0.46, 0.06), "fabric_sage", z=0.44, group="desk")
-    f.wall_block(wall, "chair_back", u, 1.18, (0.46, 0.06, 0.50), "fabric_sage", z=0.44, group="desk")
+    if f.placement_cost(b_wall, b_u, bench_w, 0.36, avoid_windows=True, ignore_group="bench") < 800.0:
+        f.wall_block(b_wall, "shoe_bench", b_u, 0.20, (bench_w, 0.36, 0.44), "oak_light", group="bench")
+        f.wall_block(b_wall, "shoe_shelf", b_u, 0.20, (bench_w - 0.08, 0.30, 0.03), "metal", z=0.14, blocks=False, group="bench")
 
-    shelf_w = min(1.4, max(0.85, min(f.width, f.depth) * 0.42))
-    s_wall, s_u = f.find_wall_placement(
-        shelf_w,
-        0.34,
-        avoid_windows=True,
-        prefer_walls=("left", "right", "back", "front"),
-        ignore_group="shelf",
-    )
-    f.wall_block(s_wall, "shelf", s_u, 0.18, (shelf_w, 0.28, 0.04), "oak_light", z=1.48, blocks=False, group="shelf")
+    f.wall_block(wall, "coat_hooks", u + console_w * 0.5, 0.05, (0.55, 0.04, 0.06), "brass", z=1.62, blocks=False, group="console")
+    f.rug(min(1.4, f.width * 0.5), min(0.9, f.depth * 0.28))
+
+
+# -------------------------------------------------------------------- hall
+def _hall(f: Furnisher) -> None:
+    """A landing or hall: barely furnished, but never bare.
+
+    A landing is mostly circulation, so it gets a plant in whichever corner is
+    furthest from a doorway plus a runner. The solver still chooses the corner;
+    the doorway filter removes the plant outright if every corner is a doorway.
+    """
+    if min(f.width, f.depth) >= 1.3:
+        wall, u = f.find_wall_placement(
+            0.55, 0.55, avoid_windows=False, prefer_walls=("back", "left", "right", "front"), ignore_group="plant"
+        )
+        f.wall_round(wall, "plant_pot", u, 0.30, 0.17, 0.40, "terracotta", group="plant")
+        f.wall_round(wall, "plant", u, 0.30, 0.24, 0.52, "foliage", z=0.40, blocks=False, group="plant")
+    f.rug(min(1.8, f.width * 0.6), min(1.2, f.depth * 0.4))
 
 
 # ----------------------------------------------------------------- outdoor
@@ -825,6 +896,8 @@ RECIPES = {
     "bath": _bath,
     "wc": _bath,
     "entry": _entry,
+    "hall": _hall,
+    "landing": _hall,
     "study": _study,
     "office": _study,
     "terrace": _outdoor,
@@ -845,7 +918,7 @@ def furnish(
     door_zones: list[tuple[float, float, float, float]] | None = None,
 ) -> list[Piece]:
     recipe = RECIPES.get(space.type)
-    if recipe is None or space.type in ("stair", "store", "hall", "landing"):
+    if recipe is None or space.type in ("stair", "store"):
         return []
     if space.area < 2.0:
         return []
@@ -862,8 +935,6 @@ def furnish(
 
     # Final group-level safety filter. The solver already steers furniture away
     # from doors; this only removes a group that still sits squarely in a doorway.
-    # The threshold matters: dropping on any contact at all empties rooms whose
-    # doors are simply wide.
     if furnisher.door_zones:
         bad_groups: set[str] = set()
         for group_name, rect in furnisher.group_rects.items():

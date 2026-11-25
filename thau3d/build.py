@@ -1557,7 +1557,30 @@ class Builder:
     # ----------------------------------------------------------------- lights
     def build_lights(self, storey: Storey) -> None:
         for space in storey.spaces:
-            if space.type in ("stair", "store", "garage"):
+            if space.type in ("store", "garage"):
+                continue
+            if space.type == "stair":
+                # A stairwell is the one place a house is genuinely dark: no
+                # window reaches it and the flights shade whatever is below them.
+                # Light it at the landing, where you actually look.
+                half = storey.height / 2.0
+                centre = space.center
+                self.luminaires.append(
+                    {
+                        "position": [centre[0], storey.base + half + 0.7, -centre[1]],
+                        "intensity": 7.0 + space.area * 0.35,
+                        "distance": 5.0 + space.area * 0.12,
+                        "space": space.id,
+                        "storey": storey.id,
+                    }
+                )
+                self.block(
+                    self.name("ceiling_light", storey.id),
+                    (centre[0], centre[1], storey.base + storey.clear - 0.75),
+                    (0.26, 0.26, 0.05),
+                    "led",
+                    storey.id,
+                )
                 continue
             centre = space.center
             z = storey.base + storey.clear - 0.02
