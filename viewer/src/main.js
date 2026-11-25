@@ -54,7 +54,10 @@ const state = {
   isolatedStorey: null,
   manifest: null,
   footY: 0,
+  visualFootY: 0,
   velocityY: 0,
+  vx: 0,
+  vz: 0,
   grounded: false,
   bobClock: 0,
   focusTween: null,
@@ -537,6 +540,28 @@ function titleCase(value) {
   return String(value).replace(/[-_]/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function spaceLabelAt(x, z, storeyId) {
+  const spaces = state.manifest?.spaces || [];
+  const planX = x;
+  const planY = -z;
+  for (const space of spaces) {
+    if (space.storey !== storeyId) continue;
+    const [x0, y0, x1, y1] = space.rect;
+    if (planX >= x0 - 0.05 && planX <= x1 + 0.05 && planY >= y0 - 0.05 && planY <= y1 + 0.05) {
+      return space.name;
+    }
+  }
+  return '';
+}
+
+function walkStatusAt(x, y, z) {
+  const storey = storeyForHeight(y);
+  const label = storeyLabelAt(y);
+  if (!storey || label === 'Roof') return `${label} · walking`;
+  const room = spaceLabelAt(x, z, storey.id);
+  return room ? `${label} · ${room}` : `${label} · Yard`;
+}
+
 function enterWalk() {
   if (!model || !state.manifest) return;
   state.mode = 'walk';
@@ -550,12 +575,15 @@ function enterWalk() {
   look.yaw = look.targetYaw = spawn.yaw || 0;
   look.pitch = look.targetPitch = 0;
   state.footY = spawn.position[1] - EYE;
+  state.visualFootY = state.footY;
   state.velocityY = 0;
+  state.vx = 0;
+  state.vz = 0;
   state.grounded = true;
   keys.clear();
   touchMove.clear();
   els.walkButton.querySelector('span').textContent = 'Exit walk';
-  els.status.textContent = `${storeyLabelAt(camera.position.y)} · walking`;
+  els.status.textContent = walkStatusAt(camera.position.x, camera.position.y, camera.position.z);
   requestLock();
 }
 
@@ -578,59 +606,148 @@ function respawn() {
   look.yaw = look.targetYaw = spawn.yaw || 0;
   look.pitch = look.targetPitch = 0;
   state.footY = spawn.position[1] - EYE;
+  state.visualFootY = state.footY;
   state.velocityY = 0;
+  state.vx = 0;
+  state.vz = 0;
   state.grounded = true;
 }
 
 // ------------------------------------------------------------- walk physics
+function clampToSite(x, z) {
+  const site = state.manifest?.site;
+  if (!site || !Array.isArray(site.min) || !Array.isArray(site.max)) return [x, z];
+  const inset = RADIUS + 0.14;
+  return [
+    Math.max(site.min[0] + inset, Math.min(site.max[0] - inset, x)),
+    Math.max(site.min[2] + inset, Math.min(site.max[2] - inset, z)),
+  ];
+}
+
+function resolveHorizontal(x, z, footY) {
+  let [px, pz] = clampToSite(x, z);
+  const bodyMin = footY + STEP_UP + 0.02;
+  const bodyMax = footY + BODY;
+  const colliders = state.manifest?.colliders || [];
+
+  // Circle-vs-AABB depenetration: slides smoothly along walls, door frames, and furniture
+  for (let pass = 0; pass < 3; pass += 1) {
+    let pushed = false;
+    for (const box of colliders) {
+      if (!state.furniture && box.tag === 'furniture') continue;
+      if (box.max[1] <= bodyMin || box.min[1] >= bodyMax) continue;
+      if (px + RADIUS <= box.min[0] || px - RADIUS >= box.max[0]) continue;
+      if (pz + RADIUS <= box.min[2] || pz - RADIUS >= box.max[2]) continue;
+
+      const cx = Math.max(box.min[0], Math.min(px, box.max[0]));
+      const cz = Math.max(box.min[2], Math.min(pz, box.max[2]));
+      const dx = px - cx;
+      const dz = pz - cz;
+      const distSq = dx * dx + dz * dz;
+
+      if (distSq > 1e-9 && distSq < RADIUS * RADIUS) {
+        const dist = Math.sqrt(distSq);
+        const push = RADIUS - dist + 1e-4;
+        px += (dx / dist) * push;
+        pz += (dz / dist) * push;
+        pushed = true;
+      } else if (distSq <= 1e-9) {
+        // Center is inside the AABB: push out through the nearest face
+        const dLeft = px - box.min[0];
+        const dRight = box.max[0] - px;
+        const dFront = pz - box.min[2];
+        const dBack = box.max[2] - pz;
+        const minFace = Math.min(dLeft, dRight, dFront, dBack);
+        if (minFace === dLeft) px = box.min[0] - RADIUS - 1e-4;
+        else if (minFace === dRight) px = box.max[0] + RADIUS + 1e-4;
+        else if (minFace === dFront) pz = box.min[2] - RADIUS - 1e-4;
+        else pz = box.max[2] + RADIUS + 1e-4;
+        pushed = true;
+      }
+    }
+    [px, pz] = clampToSite(px, pz);
+    if (!pushed) break;
+  }
+  return [px, pz];
+}
+
 function collidesAt(x, z, footY) {
-  const bodyMin = footY + 0.1;
+  const bodyMin = footY + STEP_UP + 0.02;
   const bodyMax = footY + BODY;
   for (const box of state.manifest.colliders) {
     if (!state.furniture && box.tag === 'furniture') continue;
     if (box.max[1] <= bodyMin || box.min[1] >= bodyMax) continue;
-    if (x + RADIUS > box.min[0] && x - RADIUS < box.max[0] && z + RADIUS > box.min[2] && z - RADIUS < box.max[2]) {
-      return true;
-    }
+    const cx = Math.max(box.min[0], Math.min(x, box.max[0]));
+    const cz = Math.max(box.min[2], Math.min(z, box.max[2]));
+    const dx = x - cx;
+    const dz = z - cz;
+    if (dx * dx + dz * dz < (RADIUS - 0.005) * (RADIUS - 0.005)) return true;
   }
   return false;
 }
 
 function supportAt(x, z, maxY) {
-  const margin = RADIUS + 0.02;
-  let best = null;
-  for (const box of state.manifest.supports) {
+  // First check supports directly under the player's center (with a 2.5 cm seam tolerance)
+  // so stepping onto a descending stair tread immediately picks that tread instead of
+  // clinging to the upper floor slab behind the player.
+  const supports = state.manifest?.supports || [];
+  let direct = null;
+  const directMargin = 0.025;
+  for (const box of supports) {
     if (box.max[1] > maxY + 0.02) continue;
-    if (x < box.min[0] - margin || x > box.max[0] + margin) continue;
-    if (z < box.min[2] - margin || z > box.max[2] + margin) continue;
-    if (!best || box.max[1] > best.max[1]) best = box;
+    if (x < box.min[0] - directMargin || x > box.max[0] + directMargin) continue;
+    if (z < box.min[2] - directMargin || z > box.max[2] + directMargin) continue;
+    if (!direct || box.max[1] > direct.max[1]) direct = box;
   }
-  return best;
+  if (direct) return direct;
+
+  // Fallback to the player's foot pad radius when standing on a step edge
+  const edgeMargin = 0.12;
+  let edgeBest = null;
+  for (const box of supports) {
+    if (box.max[1] > maxY + 0.02) continue;
+    if (x < box.min[0] - edgeMargin || x > box.max[0] + edgeMargin) continue;
+    if (z < box.min[2] - edgeMargin || z > box.max[2] + edgeMargin) continue;
+    if (!edgeBest || box.max[1] > edgeBest.max[1]) edgeBest = box;
+  }
+  return edgeBest;
+}
+
+function ceilingAt(x, z, footY, nextFootY) {
+  const headNow = footY + BODY - 0.04;
+  const headNext = nextFootY + BODY + 0.02;
+  let lowest = Infinity;
+  for (const list of [state.manifest?.supports || [], state.manifest?.colliders || []]) {
+    for (const box of list) {
+      if (box.min[1] < headNow || box.min[1] > headNext) continue;
+      if (x + RADIUS * 0.7 < box.min[0] || x - RADIUS * 0.7 > box.max[0]) continue;
+      if (z + RADIUS * 0.7 < box.min[2] || z - RADIUS * 0.7 > box.max[2]) continue;
+      if (box.min[1] < lowest) lowest = box.min[1];
+    }
+  }
+  return lowest;
 }
 
 function tryMove(dx, dz) {
   const foot = state.footY;
-  const targetX = camera.position.x + dx;
-  const targetZ = camera.position.z + dz;
+  const rawX = camera.position.x + dx;
+  const rawZ = camera.position.z + dz;
+  const [resolvedX, resolvedZ] = resolveHorizontal(rawX, rawZ, foot);
 
-  const attempt = (x, z) => {
-    const support = supportAt(x, z, foot + STEP_UP);
-    const rise = support ? support.max[1] - foot : -Infinity;
-    const canStep = support && rise <= STEP_UP && rise >= -STEP_DOWN;
-    const nextFoot = canStep ? support.max[1] : foot;
-    if (collidesAt(x, z, nextFoot)) return false;
-    camera.position.x = x;
-    camera.position.z = z;
+  const support = supportAt(resolvedX, resolvedZ, foot + STEP_UP);
+  const rise = support ? support.max[1] - foot : -Infinity;
+  const canStep = Boolean(support && rise <= STEP_UP && rise >= -STEP_DOWN);
+  const nextFoot = canStep ? support.max[1] : foot;
+  const [finalX, finalZ] = resolveHorizontal(resolvedX, resolvedZ, nextFoot);
+
+  if (!collidesAt(finalX, finalZ, nextFoot)) {
+    camera.position.x = finalX;
+    camera.position.z = finalZ;
     if (canStep) {
       state.footY = nextFoot;
       state.velocityY = 0;
       state.grounded = true;
     }
-    return true;
-  };
-
-  if (!attempt(targetX, targetZ)) {
-    if (!attempt(targetX, camera.position.z)) attempt(camera.position.x, targetZ);
   }
 }
 
@@ -648,24 +765,38 @@ function updateWalk(delta) {
     - Number(keys.has('KeyA') || keys.has('ArrowLeft') || touchMove.has('left'));
   const moving = forward !== 0 || strafe !== 0;
 
+  let targetVx = 0;
+  let targetVz = 0;
+  const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') || touchMove.has('run') ? RUN_SPEED : WALK_SPEED;
   if (moving) {
     const direction = camera.getWorldDirection(new THREE.Vector3());
     direction.y = 0;
     direction.normalize();
     const right = new THREE.Vector3().crossVectors(direction, new THREE.Vector3(0, 1, 0)).normalize();
     const length = Math.hypot(forward, strafe) || 1;
-    const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') || touchMove.has('run') ? RUN_SPEED : WALK_SPEED;
-    const stepX = (direction.x * forward + right.x * strafe) / length * speed * delta;
-    const stepZ = (direction.z * forward + right.z * strafe) / length * speed * delta;
-    const slices = Math.max(1, Math.ceil(Math.hypot(stepX, stepZ) / 0.06));
+    targetVx = ((direction.x * forward + right.x * strafe) / length) * speed;
+    targetVz = ((direction.z * forward + right.z * strafe) / length) * speed;
+  }
+
+  const accelRate = moving ? 18 : 14;
+  state.vx = THREE.MathUtils.damp(state.vx, targetVx, accelRate, delta);
+  state.vz = THREE.MathUtils.damp(state.vz, targetVz, accelRate, delta);
+  const stepX = state.vx * delta;
+  const stepZ = state.vz * delta;
+  const stepDist = Math.hypot(stepX, stepZ);
+
+  if (stepDist > 1e-5) {
+    const slices = Math.max(1, Math.ceil(stepDist / 0.045));
     for (let index = 0; index < slices; index += 1) {
       tryMove(stepX / slices, stepZ / slices);
     }
-    state.bobClock += delta * (speed > WALK_SPEED ? 13 : 9.5);
+    if (moving && state.grounded) {
+      state.bobClock += delta * (speed > WALK_SPEED ? 13 : 9.5);
+    }
   }
 
   if (jumpRequested && state.grounded) {
-    state.velocityY = 4.5;
+    state.velocityY = 4.4;
     state.grounded = false;
   }
   jumpRequested = false;
@@ -682,9 +813,16 @@ function updateWalk(delta) {
 
   if (!state.grounded) {
     state.velocityY = Math.max(state.velocityY - GRAVITY * delta, -26);
-    const next = state.footY + state.velocityY * delta;
-    const landing = supportAt(camera.position.x, camera.position.z, state.footY + 0.03);
-    if (state.velocityY <= 0 && landing && next <= landing.max[1] && landing.max[1] <= state.footY + 0.03) {
+    let next = state.footY + state.velocityY * delta;
+    if (state.velocityY > 0) {
+      const ceiling = ceilingAt(camera.position.x, camera.position.z, state.footY, next);
+      if (ceiling < Infinity) {
+        next = Math.min(next, ceiling - BODY - 0.02);
+        state.velocityY = 0;
+      }
+    }
+    const landing = supportAt(camera.position.x, camera.position.z, state.footY + 0.04);
+    if (state.velocityY <= 0 && landing && next <= landing.max[1] && landing.max[1] <= state.footY + 0.06) {
       state.footY = landing.max[1];
       state.velocityY = 0;
       state.grounded = true;
@@ -694,11 +832,17 @@ function updateWalk(delta) {
     if (state.footY < -4) respawn();
   }
 
-  const bob = moving && state.grounded ? Math.sin(state.bobClock) * 0.016 : 0;
-  camera.position.y = state.footY + EYE + bob;
+  // Smooth stair vertical transitions when grounded; track directly while airborne
+  if (state.grounded) {
+    state.visualFootY = THREE.MathUtils.damp(state.visualFootY, state.footY, 22, delta);
+  } else {
+    state.visualFootY = state.footY;
+  }
 
-  const label = storeyLabelAt(camera.position.y);
-  const next = `${label} · walking`;
+  const bob = moving && state.grounded ? Math.sin(state.bobClock) * 0.014 : 0;
+  camera.position.y = state.visualFootY + EYE + bob;
+
+  const next = walkStatusAt(camera.position.x, camera.position.y, camera.position.z);
   if (els.status.textContent !== next) els.status.textContent = next;
 }
 
@@ -849,7 +993,7 @@ function animate(now = performance.now()) {
 }
 
 if (import.meta.env.DEV) {
-  window.thau = { scene, camera, orbit, state, renderer };
+  window.thau = { scene, camera, orbit, state, renderer, look, supportAt, collidesAt, resolveHorizontal };
 }
 
 resize();

@@ -16,8 +16,10 @@ def space_for(box):
     cy = -(box["min"][2] + box["max"][2]) / 2
     bottom = box["min"][1]
     for space in spaces:
-        base = storeys[space["storey"]]["base"]
-        if not (base - 0.05 <= bottom <= base + 0.6):
+        storey = storeys[space["storey"]]
+        # Wall-hung pieces sit well above the floor, so the band has to be the
+        # whole storey, not the first half metre.
+        if not (storey["base"] - 0.1 <= bottom <= storey["base"] + storey["height"]):
             continue
         x0, y0, x1, y1 = space["rect"]
         if x0 - 0.05 <= cx <= x1 + 0.05 and y0 - 0.05 <= cy <= y1 + 0.05:

@@ -71,9 +71,9 @@
   ],
 
   "stairs": [
-    { "id": "to_first", "storey": "ground", "x": [15.3, 25.7], "y": [25.5, 36.8], "width": 4 },
-    { "id": "to_second", "storey": "first", "x": [15.3, 25.7], "y": [25.5, 36.8], "width": 4 },
-    { "id": "to_roof", "storey": "second", "x": [15.3, 25.7], "y": [25.5, 36.8], "width": 4 }
+    { "id": "to_first", "storey": "ground", "x": [15.3, 25.7], "y": [26.4, 38], "width": 4 },
+    { "id": "to_second", "storey": "first", "x": [15.3, 25.7], "y": [26.4, 38], "width": 4 },
+    { "id": "to_roof", "storey": "second", "x": [15.3, 25.7], "y": [26.4, 38], "width": 4 }
   ],
 
   "windows": [
