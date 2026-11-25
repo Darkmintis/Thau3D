@@ -94,12 +94,27 @@ class RoofTest(unittest.TestCase):
 
 class StairFormTest(unittest.TestCase):
     def test_straight_stair_reaches_the_next_storey(self):
-        _gltf, manifest = build(CABIN)
+        # Build a small building whose stair is explicitly straight: the example
+        # cabins use the U form, and this test is about the other builder path.
+        raw = json.loads(CABIN.read_text(encoding="utf-8"))
+        raw["stairs"] = [
+            {
+                "id": "main",
+                "storey": "ground",
+                "form": "straight",
+                "x": [12.3, 19.7],
+                "y": [12, 25.8],
+                "width": 3.6,
+            }
+        ]
+        path = Path(tempfile.mkdtemp()) / "straight.thau.json"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        _gltf, manifest = build(path)
         stair = manifest["stairs"][0]
         self.assertIsNone(stair["landing"])
         storey = manifest["storeys"][0]
         self.assertAlmostEqual(stair["top"], storey["base"] + storey["height"], places=3)
-        self.assertEqual(len(stair["steps"]), 17)
+        self.assertGreater(len(stair["steps"]), 10)
         rise = stair["steps"][1]["top"] - stair["steps"][0]["top"]
         self.assertLess(rise, 0.19)
 

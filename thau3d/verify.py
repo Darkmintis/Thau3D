@@ -182,6 +182,41 @@ def verify(building: Building) -> list[Check]:
     if not any(check.name.startswith("coverage") for check in checks):
         checks.append(Check("pass", "coverage", "every storey fills the footprint"))
 
+    # --------------------------------------------------------- stair access
+    # Two failures found by walking the model, not by looking at it: a strip of
+    # floor beside the flights (a hole to fall down) and no floor at the foot of
+    # the steps (nowhere to stand before climbing, and nowhere to land when you
+    # come up from below).
+    access_issues: list[str] = []
+    for stair in building.stairs:
+        storey = building.storey(stair.storey)
+        if storey is None:
+            continue
+        well = next(
+            (
+                space
+                for space in storey.spaces
+                if space.type == "stair"
+                and space.x0 - 1e-3 <= stair.x0
+                and space.x1 + 1e-3 >= stair.x1
+                and space.y0 - 1e-3 <= stair.y0
+                and space.y1 + 1e-3 >= stair.y1
+            ),
+            None,
+        )
+        if well is None:
+            continue
+        side_gap = max(stair.x0 - well.x0, well.x1 - stair.x1)
+        if side_gap > 0.28:
+            access_issues.append(f"{stair.id}: {side_gap * 100:.0f} cm of floor beside the flights")
+        approach = stair.y0 - well.y0
+        if approach < 0.55:
+            access_issues.append(f"{stair.id}: only {approach * 100:.0f} cm of floor at the foot")
+    if access_issues:
+        checks.append(Check("fail", "stair access", "; ".join(access_issues)))
+    elif building.stairs:
+        checks.append(Check("pass", "stair access", "flights meet the stairwell walls, with floor at the foot"))
+
     # ------------------------------------------------------------- balconies
     for balcony in building.balconies:
         if balcony.railing < MIN_BALCONY_RAIL:
